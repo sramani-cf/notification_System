@@ -1,0 +1,40 @@
+{
+  "name": "notification-system-backend",
+  "version": "1.0.0",
+  "description": "Notification system backend with load balancer and MongoDB storage",
+  "main": "load-balancer/server.js",
+  "scripts": {
+    "dev": "concurrently -c \"bgBlue.bold,bgGreen.bold,bgYellow.bold,bgMagenta.bold\" -n \"BALANCER,SERVER-1,SERVER-2,SERVER-3\" \"npm run balancer\" \"npm run server1\" \"npm run server2\" \"npm run server3\"",
+    "balancer": "nodemon load-balancer/server.js",
+    "server1": "nodemon servers/server1.js",
+    "server2": "nodemon servers/server2.js",
+    "server3": "nodemon servers/server3.js",
+    "start": "node load-balancer/server.js",
+    "start:all": "concurrently \"node load-balancer/server.js\" \"node servers/server1.js\" \"node servers/server2.js\" \"node servers/server3.js\""
+  },
+  "keywords": [
+    "notification",
+    "load-balancer",
+    "express",
+    "mongodb",
+    "nodejs"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "http-proxy-middleware": "^2.0.6",
+    "mongoose": "^8.0.0"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=14.0.0",
+    "npm": ">=6.0.0"
+  }
+}
