@@ -1,0 +1,403 @@
+{
+  "info": {
+    "_postman_id": "a8f5f2f2-4f4f-4f4f-4f4f-4f4f4f4f4f4f",
+    "name": "Notification System API - Backend",
+    "description": "This collection contains all the endpoints for the Notification System Backend API.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "description": "Endpoints for checking the health of the service.",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Check the health of the service."
+          },
+          "response": []
+        },
+        {
+          "name": "Server Info",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/server-info",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "server-info"
+              ]
+            },
+            "description": "Get information about the server."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Signups",
+      "description": "Endpoints for user signup.",
+      "item": [
+        {
+          "name": "Create Signup",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": 1,\n  \"username\": \"testuser\",\n  \"email\": \"testuser@example.com\",\n  \"password\": \"password123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/signups",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "signups"
+              ]
+            },
+            "description": "Create a new user signup."
+          },
+          "response": []
+        },
+        {
+          "name": "Get All Signups",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/signups",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "signups"
+              ]
+            },
+            "description": "Get all user signups."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Signup By ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/signups/{{signupId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "signups",
+                "{{signupId}}"
+              ]
+            },
+            "description": "Get a user signup by ID."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Signup",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"updateduser\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/signups/{{signupId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "signups",
+                "{{signupId}}"
+              ]
+            },
+            "description": "Update a user signup."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Signup",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/signups/{{signupId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "signups",
+                "{{signupId}}"
+              ]
+            },
+            "description": "Delete a user signup."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Logins",
+      "description": "Endpoints for user login.",
+      "item": [
+        {
+          "name": "Create Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": 1,\n  \"username\": \"testuser\",\n  \"email\": \"testuser@example.com\",\n  \"password\": \"password123\",\n  \"ipAddress\": \"127.0.0.1\",\n  \"device\": \"Postman\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/logins",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "logins"
+              ]
+            },
+            "description": "Create a new user login."
+          },
+          "response": []
+        },
+        {
+          "name": "Get All Logins",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/logins",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "logins"
+              ]
+            },
+            "description": "Get all user logins."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Reset Passwords",
+      "description": "Endpoints for resetting password.",
+      "item": [
+        {
+          "name": "Create Reset Password Request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": 1,\n  \"email\": \"testuser@example.com\",\n  \"resetToken\": \"some-token\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/reset-passwords",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reset-passwords"
+              ]
+            },
+            "description": "Create a new reset password request."
+          },
+          "response": []
+        },
+        {
+          "name": "Get All Reset Password Requests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reset-passwords",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reset-passwords"
+              ]
+            },
+            "description": "Get all reset password requests."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Purchases",
+      "description": "Endpoints for purchases.",
+      "item": [
+        {
+          "name": "Create Purchase",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"userId\": 1,\n  \"orderId\": \"order-123\",\n  \"amount\": 99.99,\n  \"items\": [\n    {\n      \"name\": \"Item 1\",\n      \"quantity\": 1,\n      \"price\": 99.99\n    }\n  ],\n  \"totalAmount\": 99.99\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/purchases",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "purchases"
+              ]
+            },
+            "description": "Create a new purchase."
+          },
+          "response": []
+        },
+        {
+          "name": "Get All Purchases",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/purchases",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "purchases"
+              ]
+            },
+            "description": "Get all purchases."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Friend Requests",
+      "description": "Endpoints for friend requests.",
+      "item": [
+        {
+          "name": "Create Friend Request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fromUserId\": 1,\n  \"fromUsername\": \"testuser\",\n  \"toUserId\": 2,\n  \"toUsername\": \"frienduser\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/friend-requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "friend-requests"
+              ]
+            },
+            "description": "Create a new friend request."
+          },
+          "response": []
+        },
+        {
+          "name": "Get All Friend Requests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/friend-requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "friend-requests"
+              ]
+            },
+            "description": "Get all friend requests."
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080/api"
+    },
+    {
+      "key": "signupId",
+      "value": ""
+    },
+    {
+      "key": "loginId",
+      "value": ""
+    },
+    {
+      "key": "resetPasswordId",
+      "value": ""
+    },
+    {
+      "key": "purchaseId",
+      "value": ""
+    },
+    {
+      "key": "friendRequestId",
+      "value": ""
+    },
+    {
+      "key": "token",
+      "value": ""
+    }
+  ]
+}
