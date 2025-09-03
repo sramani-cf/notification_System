@@ -120,10 +120,17 @@ class MailWorker {
       // Update signup record if this is a welcome email
       let signup = null;
       if (jobData.type === 'signup' && jobData.originalData.signupId) {
+        logger.info(`Looking for signup record with ID: ${jobData.originalData.signupId}`, 'MAIL-WORKER');
         signup = await Signup.findById(jobData.originalData.signupId);
         if (signup) {
+          logger.info(`Found signup record for ${signup.username} - marking email as sending`, 'MAIL-WORKER');
           await signup.markWelcomeEmailSending(queueName);
+          logger.success(`Updated signup email status to 'sending' for ${signup.username}`, 'MAIL-WORKER');
+        } else {
+          logger.error(`Signup record not found for ID: ${jobData.originalData.signupId}`, 'MAIL-WORKER');
         }
+      } else if (jobData.type === 'signup') {
+        logger.error(`Missing signupId in job data for signup email`, 'MAIL-WORKER');
       }
 
       // Update reset password record if this is a reset password email
@@ -162,6 +169,8 @@ class MailWorker {
       // Update signup record on successful delivery
       if (signup) {
         await signup.markWelcomeEmailDelivered(result.messageId, result.response);
+        logger.success(`Welcome email delivered successfully for ${signup.username} (MessageID: ${result.messageId})`, 'MAIL-WORKER');
+        logger.info(`Signup email status updated to 'delivered' for user ${signup.username}`, 'MAIL-WORKER');
       }
       
       // Update reset password record on successful delivery
@@ -194,6 +203,9 @@ class MailWorker {
             const signup = await Signup.findById(jobData.originalData.signupId);
             if (signup) {
               await signup.markWelcomeEmailFailed(error.message, queueName);
+              logger.error(`Marked welcome email as failed for ${signup.username}: ${error.message}`, 'MAIL-WORKER');
+            } else {
+              logger.error(`Cannot update signup email failure - signup record not found for ID: ${jobData.originalData.signupId}`, 'MAIL-WORKER');
             }
           } catch (signupError) {
             logger.error(`Failed to update signup email status: ${signupError.message}`, 'MAIL-WORKER');

@@ -218,9 +218,10 @@ class NotificationService {
       originalData: { 
         ...data,
         // Add IDs for different email types to enable callback tracking
-        resetPasswordId: options.resetPasswordId || null,
-        loginId: options.loginId || null,
-        signupId: options.signupId || null
+        // Check both data and options for tracking IDs (data takes precedence)
+        resetPasswordId: data.resetPasswordId || options.resetPasswordId || null,
+        loginId: data.loginId || options.loginId || null,
+        signupId: data.signupId || options.signupId || null
       },
       serverInfo: options.serverInfo || 'NOTIFICATION-SERVICE',
       processedBy: `${options.serverInfo || 'NOTIFICATION-SERVICE'}-${Date.now()}`,
