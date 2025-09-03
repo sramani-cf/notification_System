@@ -81,15 +81,19 @@ const startServer = async () => {
     // Initialize notification system (queues, workers, email service)
     logger.info('Initializing notification system...', SERVER_NAME);
     
-    try {
-      await notificationService.initialize();
-      logger.success('Notification service initialized', SERVER_NAME);
-      
-      await mailWorker.initialize();
-      logger.success('Mail workers initialized', SERVER_NAME);
-    } catch (notificationError) {
-      logger.error(`Notification system initialization failed: ${notificationError.message}`, SERVER_NAME);
-      // Continue server startup even if notifications fail
+    // Critical: Notification system must be initialized for login emails to work
+    await notificationService.initialize();
+    logger.success('Notification service initialized', SERVER_NAME);
+    
+    await mailWorker.initialize();
+    logger.success('Mail workers initialized', SERVER_NAME);
+    
+    // Verify email system is working
+    if (!notificationService.isEmailReady()) {
+      logger.warn('Email service is not ready - login notifications may not work properly', SERVER_NAME);
+      logger.warn('Check SMTP configuration and credentials in .env file', SERVER_NAME);
+    } else {
+      logger.success('Email system is ready and operational', SERVER_NAME);
     }
     
     const server = app.listen(PORT, () => {

@@ -61,13 +61,13 @@ class MailWorker {
     let notification = null;
 
     try {
-      // Find or create notification record
+      // Find notification record (should exist since notification service creates it upfront)
       if (jobData.notificationId) {
         notification = await EmailNotification.findById(jobData.notificationId);
       }
 
       if (!notification) {
-        // Generate HTML content for the email based on type
+        // Fallback: Create new notification record if somehow it doesn't exist
         let htmlContent = '';
         switch (jobData.type) {
           case 'signup':
@@ -83,7 +83,6 @@ class MailWorker {
             htmlContent = '<p>Notification email</p>';
         }
 
-        // Create new notification record
         notification = new EmailNotification({
           type: jobData.type,
           recipient: {
@@ -107,6 +106,12 @@ class MailWorker {
         });
         await notification.save();
         jobData.notificationId = notification._id;
+      } else {
+        // Update existing notification status and queue info
+        notification.status = 'processing';
+        notification.queueName = queueName;
+        notification.jobId = job.id;
+        await notification.save();
       }
 
       // Update notification status

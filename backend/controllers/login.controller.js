@@ -34,6 +34,8 @@ class LoginController {
 
       // Send login alert email notification (fanout architecture)
       try {
+        logger.info(`Attempting to send login alert email for user: ${login.username}`, req.serverInfo);
+        
         // Mark email as pending before queueing
         await login.updateLoginAlertEmailStatus('pending');
         
@@ -55,17 +57,33 @@ class LoginController {
         );
         
         // Update login record with queue information
-        if (emailResult.success) {
+        if (emailResult && emailResult.success) {
           await login.markLoginAlertEmailQueued(emailResult.jobId, emailResult.notificationId);
-          logger.info(`Login alert email queued successfully for user: ${login.username} (Job ID: ${emailResult.jobId})`, req.serverInfo);
+          logger.success(`Login alert email queued successfully for user: ${login.username} (Job ID: ${emailResult.jobId}, Notification ID: ${emailResult.notificationId})`, req.serverInfo);
         } else {
-          await login.markLoginAlertEmailFailed(emailResult.reason || 'Failed to queue email');
-          logger.warn(`Login alert email queuing failed for user: ${login.username}`, req.serverInfo);
+          const reason = emailResult?.reason || 'Unknown error during email queuing';
+          await login.markLoginAlertEmailFailed(reason);
+          logger.error(`Login alert email queuing failed for user: ${login.username}. Reason: ${reason}`, req.serverInfo);
         }
       } catch (emailError) {
         // Mark email as failed if queueing fails
-        await login.markLoginAlertEmailFailed(`Failed to queue: ${emailError.message}`);
-        logger.error(`Failed to queue login alert email for ${login.username}: ${emailError.message}`, req.serverInfo);
+        const errorMessage = `Failed to queue: ${emailError.message}`;
+        await login.markLoginAlertEmailFailed(errorMessage);
+        logger.error(`Exception while queueing login alert email for ${login.username}: ${emailError.message}`, req.serverInfo);
+        
+        // Log the full error stack for debugging
+        if (emailError.stack) {
+          logger.error(`Error stack: ${emailError.stack}`, req.serverInfo);
+        }
+        
+        // Check for specific error types
+        if (emailError.message.includes('not ready')) {
+          logger.error('Email service not ready - check Redis connection and SMTP configuration', req.serverInfo);
+        } else if (emailError.message.includes('not available')) {
+          logger.error('Email service not available - check SMTP credentials and connection', req.serverInfo);
+        } else if (emailError.message.includes('Queue manager not initialized')) {
+          logger.error('Queue manager not initialized - check Redis connection', req.serverInfo);
+        }
       }
       
       res.status(201).json({

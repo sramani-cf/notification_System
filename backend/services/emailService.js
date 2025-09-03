@@ -10,10 +10,15 @@ class EmailService {
 
   async initialize() {
     try {
+      logger.info('Starting email service initialization...', 'EMAIL-SERVICE');
+      
       if (!config.email.user || !config.email.password) {
-        logger.warn('Email credentials not configured. Email service will be disabled.', 'EMAIL-SERVICE');
+        logger.error('Email credentials not configured. Check EMAIL_USER and EMAIL_PASSWORD in .env file', 'EMAIL-SERVICE');
         return false;
       }
+
+      logger.info(`Connecting to SMTP server: ${config.email.host}:${config.email.port}`, 'EMAIL-SERVICE');
+      logger.info(`Using email account: ${config.email.user}`, 'EMAIL-SERVICE');
 
       this.transporter = nodemailer.createTransport({
         host: config.email.host,
@@ -26,24 +31,53 @@ class EmailService {
         pool: true,
         maxConnections: 5,
         maxMessages: 100,
-        rateLimit: 5 // 5 emails per second max
+        rateLimit: 5, // 5 emails per second max
+        connectionTimeout: 10000, // 10 seconds
+        greetingTimeout: 5000, // 5 seconds
+        socketTimeout: 10000 // 10 seconds
       });
 
-      // Verify SMTP connection
-      await this.transporter.verify();
+      // Verify SMTP connection with retry logic
+      await this.verifyConnectionWithRetry();
       this.isInitialized = true;
       logger.success('Email service initialized successfully', 'EMAIL-SERVICE');
       return true;
     } catch (error) {
       logger.error(`Failed to initialize email service: ${error.message}`, 'EMAIL-SERVICE');
+      logger.error('Common solutions:', 'EMAIL-SERVICE');
+      logger.error('1. Check if EMAIL_PASSWORD is a valid Gmail App Password (not regular password)', 'EMAIL-SERVICE');
+      logger.error('2. Verify Gmail account has 2-factor authentication enabled', 'EMAIL-SERVICE');
+      logger.error('3. Check network connectivity to smtp.gmail.com:587', 'EMAIL-SERVICE');
       this.isInitialized = false;
       return false;
     }
   }
 
+  async verifyConnectionWithRetry(maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        logger.info(`Testing SMTP connection (attempt ${attempt}/${maxRetries})...`, 'EMAIL-SERVICE');
+        await this.transporter.verify();
+        logger.success('SMTP connection test passed', 'EMAIL-SERVICE');
+        return true;
+      } catch (error) {
+        logger.warn(`SMTP connection test failed (attempt ${attempt}/${maxRetries}): ${error.message}`, 'EMAIL-SERVICE');
+        
+        if (attempt === maxRetries) {
+          throw error;
+        }
+        
+        // Wait before retry (exponential backoff)
+        const delay = Math.pow(2, attempt) * 1000;
+        logger.info(`Retrying in ${delay}ms...`, 'EMAIL-SERVICE');
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+
   async sendEmail({ to, subject, html, text }) {
     if (!this.isInitialized) {
-      throw new Error('Email service not initialized');
+      throw new Error('Email service not initialized - check SMTP configuration');
     }
 
     if (!to || !subject || !html) {
@@ -59,7 +93,7 @@ class EmailService {
     };
 
     try {
-      logger.info(`Sending email to ${to} with subject: ${subject}`, 'EMAIL-SERVICE');
+      logger.info(`Sending email to ${to} with subject: "${subject}"`, 'EMAIL-SERVICE');
       const info = await this.transporter.sendMail(mailOptions);
       logger.success(`Email sent successfully to ${to}. MessageId: ${info.messageId}`, 'EMAIL-SERVICE');
       
@@ -70,6 +104,18 @@ class EmailService {
       };
     } catch (error) {
       logger.error(`Failed to send email to ${to}: ${error.message}`, 'EMAIL-SERVICE');
+      
+      // Log specific error details for debugging
+      if (error.code) {
+        logger.error(`Error code: ${error.code}`, 'EMAIL-SERVICE');
+      }
+      if (error.response) {
+        logger.error(`SMTP response: ${error.response}`, 'EMAIL-SERVICE');
+      }
+      if (error.command) {
+        logger.error(`Failed SMTP command: ${error.command}`, 'EMAIL-SERVICE');
+      }
+      
       throw error;
     }
   }

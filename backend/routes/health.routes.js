@@ -62,6 +62,64 @@ router.get('/queue-health', async (req, res) => {
   }
 });
 
+// Email system health check endpoint
+router.get('/email-health', async (req, res) => {
+  try {
+    const serverInfo = req.serverInfo || 'Unknown';
+    
+    // Check if notification service is ready
+    const notificationReady = notificationService.isReady();
+    const emailReady = notificationService.isEmailReady();
+    
+    // Test email service connection
+    const emailConnectionTest = await emailService.testConnection();
+    
+    // Check if queue manager is initialized
+    const queueReady = queueManager.isInitialized;
+    
+    // Check if workers are running
+    const workerStats = await mailWorker.getWorkerStats();
+    const workersRunning = Object.values(workerStats).some(worker => worker.isRunning);
+    
+    const overallHealth = notificationReady && emailReady && queueReady && workersRunning;
+    
+    res.status(overallHealth ? 200 : 503).json({
+      status: overallHealth ? 'healthy' : 'unhealthy',
+      server: serverInfo,
+      timestamp: new Date().toISOString(),
+      components: {
+        notificationService: {
+          ready: notificationReady,
+          emailReady: emailReady
+        },
+        queueManager: {
+          initialized: queueReady
+        },
+        emailService: emailConnectionTest,
+        mailWorkers: {
+          running: workersRunning,
+          stats: workerStats
+        }
+      },
+      recommendations: overallHealth ? [] : [
+        !notificationReady && 'Check notification service initialization',
+        !emailReady && 'Check email service SMTP configuration',
+        !queueReady && 'Check Redis connection for queue manager',
+        !workersRunning && 'Check if mail workers are running'
+      ].filter(Boolean)
+    });
+  } catch (error) {
+    logger.error(`Email health check failed: ${error.message}`, req.serverInfo);
+    res.status(503).json({
+      status: 'error',
+      server: req.serverInfo || 'Unknown',
+      timestamp: new Date().toISOString(),
+      error: error.message,
+      recommendations: ['Check server logs for detailed error information']
+    });
+  }
+});
+
 // Notification statistics endpoint
 router.get('/notification-stats', async (req, res) => {
   try {

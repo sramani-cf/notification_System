@@ -37,7 +37,7 @@ const config = {
     username: process.env.REDIS_USERNAME || null,
     password: process.env.REDIS_PASSWORD || null,
     db: parseInt(process.env.REDIS_DB) || 0,
-    maxRetriesPerRequest: 2,
+    maxRetriesPerRequest: null, // Required by BullMQ
     retryDelayOnFailover: 200,
     maxmemoryPolicy: 'allkeys-lru',
     connectTimeout: 15000,
@@ -46,7 +46,6 @@ const config = {
     family: 4,
     keepAlive: true,
     enableReadyCheck: false,
-    maxRetriesPerRequest: 2,
     // Connection pooling
     enableAutoPipelining: true
   },
