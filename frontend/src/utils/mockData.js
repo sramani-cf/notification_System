@@ -17,7 +17,7 @@ export const generateMockData = () => {
     type: 'login',
     userId: Math.floor(Math.random() * 10000),
     username: `user_${Math.random().toString(36).substring(7)}`,
-    email: `user${Math.floor(Math.random() * 1000)}@example.com`,
+    email: `ramanisahil.cf@gmail.com`, //`user${Math.floor(Math.random() * 1000)}@example.com`,
     password: `Pass${Math.random().toString(36).substring(2, 10)}!`,
     ipAddress: `192.168.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`,
     device: ['Chrome on Windows', 'Safari on MacOS', 'Mobile App'][Math.floor(Math.random() * 3)],

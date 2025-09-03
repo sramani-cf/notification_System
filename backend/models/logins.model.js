@@ -90,6 +90,60 @@ const loginSchema = new mongoose.Schema({
     type: String,
     required: false
   },
+  // Email delivery tracking fields (mirrors signup schema structure)
+  loginAlertEmail: {
+    status: {
+      type: String,
+      enum: ['pending', 'queued', 'sending', 'delivered', 'failed', 'not_sent'],
+      default: 'not_sent',
+      index: true
+    },
+    attempts: {
+      type: Number,
+      default: 0
+    },
+    lastAttemptAt: {
+      type: Date,
+      default: null
+    },
+    deliveredAt: {
+      type: Date,
+      default: null
+    },
+    failedAt: {
+      type: Date,
+      default: null
+    },
+    failureReason: {
+      type: String,
+      default: null
+    },
+    messageId: {
+      type: String,
+      default: null
+    },
+    notificationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'EmailNotification',
+      default: null,
+      index: true
+    },
+    queueJobId: {
+      type: String,
+      default: null
+    },
+    smtpResponse: {
+      type: String,
+      default: null
+    },
+    deliveryHistory: [{
+      attempt: Number,
+      timestamp: Date,
+      status: String,
+      error: String,
+      queueName: String
+    }]
+  },
   metadata: {
     type: Map,
     of: mongoose.Schema.Types.Mixed
@@ -144,6 +198,76 @@ loginSchema.methods.checkSuspiciousActivity = function() {
   }
 };
 
+// Instance methods for login alert email delivery tracking (mirrors signup methods)
+loginSchema.methods.updateLoginAlertEmailStatus = function(status, details = {}) {
+  this.loginAlertEmail = this.loginAlertEmail || {};
+  this.loginAlertEmail.status = status;
+  
+  // Add to delivery history
+  this.loginAlertEmail.deliveryHistory = this.loginAlertEmail.deliveryHistory || [];
+  this.loginAlertEmail.deliveryHistory.push({
+    attempt: this.loginAlertEmail.attempts + 1,
+    timestamp: new Date(),
+    status: status,
+    error: details.error || null,
+    queueName: details.queueName || 'mail'
+  });
+  
+  // Update specific fields based on status
+  switch (status) {
+    case 'queued':
+      this.loginAlertEmail.queueJobId = details.jobId;
+      this.loginAlertEmail.notificationId = details.notificationId;
+      break;
+    case 'sending':
+      this.loginAlertEmail.attempts += 1;
+      this.loginAlertEmail.lastAttemptAt = new Date();
+      break;
+    case 'delivered':
+      this.loginAlertEmail.deliveredAt = new Date();
+      this.loginAlertEmail.messageId = details.messageId;
+      this.loginAlertEmail.smtpResponse = details.smtpResponse;
+      break;
+    case 'failed':
+      this.loginAlertEmail.failedAt = new Date();
+      this.loginAlertEmail.failureReason = details.error || 'Unknown error';
+      this.loginAlertEmail.attempts += 1;
+      this.loginAlertEmail.lastAttemptAt = new Date();
+      break;
+  }
+  
+  return this.save();
+};
+
+loginSchema.methods.markLoginAlertEmailQueued = function(jobId, notificationId) {
+  return this.updateLoginAlertEmailStatus('queued', { jobId, notificationId });
+};
+
+loginSchema.methods.markLoginAlertEmailSending = function(queueName = 'mail') {
+  return this.updateLoginAlertEmailStatus('sending', { queueName });
+};
+
+loginSchema.methods.markLoginAlertEmailDelivered = function(messageId, smtpResponse) {
+  return this.updateLoginAlertEmailStatus('delivered', { messageId, smtpResponse });
+};
+
+loginSchema.methods.markLoginAlertEmailFailed = function(error, queueName = 'mail') {
+  return this.updateLoginAlertEmailStatus('failed', { error, queueName });
+};
+
+loginSchema.methods.getLoginAlertEmailSummary = function() {
+  return {
+    status: this.loginAlertEmail?.status || 'not_sent',
+    attempts: this.loginAlertEmail?.attempts || 0,
+    lastAttemptAt: this.loginAlertEmail?.lastAttemptAt,
+    deliveredAt: this.loginAlertEmail?.deliveredAt,
+    failedAt: this.loginAlertEmail?.failedAt,
+    messageId: this.loginAlertEmail?.messageId,
+    failureReason: this.loginAlertEmail?.failureReason,
+    totalHistoryEntries: this.loginAlertEmail?.deliveryHistory?.length || 0
+  };
+};
+
 loginSchema.methods.toJSON = function() {
   const obj = this.toObject();
   if (obj.metadata instanceof Map) {
@@ -169,6 +293,19 @@ loginSchema.statics.getSuspiciousLogins = function(limit = 100) {
   return this.find({ isSuspicious: true })
     .sort({ createdAt: -1 })
     .limit(limit);
+};
+
+// Static methods for login alert email management (mirrors signup methods)
+loginSchema.statics.getFailedLoginAlertEmails = function() {
+  return this.find({
+    'loginAlertEmail.status': 'failed'
+  }).sort({ 'loginAlertEmail.failedAt': -1 });
+};
+
+loginSchema.statics.getPendingLoginAlertEmails = function() {
+  return this.find({
+    'loginAlertEmail.status': { $in: ['pending', 'queued', 'sending'] }
+  }).sort({ createdAt: -1 });
 };
 
 loginSchema.statics.getLoginStatistics = async function() {
@@ -197,6 +334,34 @@ loginSchema.statics.getLoginStatistics = async function() {
     }
   ]);
   
+  // Login alert email statistics
+  const emailStats = await this.aggregate([
+    {
+      $group: {
+        _id: null,
+        total: { $sum: 1 },
+        delivered: {
+          $sum: { $cond: [{ $eq: ['$loginAlertEmail.status', 'delivered'] }, 1, 0] }
+        },
+        failed: {
+          $sum: { $cond: [{ $eq: ['$loginAlertEmail.status', 'failed'] }, 1, 0] }
+        },
+        pending: {
+          $sum: { $cond: [{ $eq: ['$loginAlertEmail.status', 'pending'] }, 1, 0] }
+        },
+        queued: {
+          $sum: { $cond: [{ $eq: ['$loginAlertEmail.status', 'queued'] }, 1, 0] }
+        },
+        sending: {
+          $sum: { $cond: [{ $eq: ['$loginAlertEmail.status', 'sending'] }, 1, 0] }
+        },
+        not_sent: {
+          $sum: { $cond: [{ $eq: ['$loginAlertEmail.status', 'not_sent'] }, 1, 0] }
+        }
+      }
+    }
+  ]);
+  
   return {
     today: {
       total: todayLogins,
@@ -204,7 +369,16 @@ loginSchema.statics.getLoginStatistics = async function() {
       failed: failedToday,
       suspicious: suspiciousToday
     },
-    topDevices: deviceStats
+    topDevices: deviceStats,
+    loginAlertEmails: emailStats[0] || {
+      total: 0,
+      delivered: 0,
+      failed: 0,
+      pending: 0,
+      queued: 0,
+      sending: 0,
+      not_sent: 0
+    }
   };
 };
 

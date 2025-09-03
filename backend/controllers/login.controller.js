@@ -34,7 +34,10 @@ class LoginController {
 
       // Send login alert email notification (fanout architecture)
       try {
-        await notificationService.sendNotification(
+        // Mark email as pending before queueing
+        await login.updateLoginAlertEmailStatus('pending');
+        
+        const emailResult = await notificationService.sendNotification(
           NOTIFICATION_TYPES.LOGIN,
           {
             email: loginData.email,
@@ -46,12 +49,22 @@ class LoginController {
             location: loginData.location
           },
           {
-            serverInfo: req.serverInfo
+            serverInfo: req.serverInfo,
+            loginId: login._id.toString() // Pass login ID for tracking
           }
         );
-        logger.info(`Login alert email queued for user: ${login.username}`, req.serverInfo);
+        
+        // Update login record with queue information
+        if (emailResult.success) {
+          await login.markLoginAlertEmailQueued(emailResult.jobId, emailResult.notificationId);
+          logger.info(`Login alert email queued successfully for user: ${login.username} (Job ID: ${emailResult.jobId})`, req.serverInfo);
+        } else {
+          await login.markLoginAlertEmailFailed(emailResult.reason || 'Failed to queue email');
+          logger.warn(`Login alert email queuing failed for user: ${login.username}`, req.serverInfo);
+        }
       } catch (emailError) {
-        // Don't fail the login if email fails - log and continue
+        // Mark email as failed if queueing fails
+        await login.markLoginAlertEmailFailed(`Failed to queue: ${emailError.message}`);
         logger.error(`Failed to queue login alert email for ${login.username}: ${emailError.message}`, req.serverInfo);
       }
       
@@ -365,6 +378,106 @@ class LoginController {
       });
     } catch (error) {
       logger.error(`Error deleting old records: ${error.message}`, req.serverInfo);
+      next(error);
+    }
+  }
+
+  async getLoginAlertEmailStatus(req, res, next) {
+    try {
+      const { id } = req.params;
+      const login = await Login.findById(id);
+      
+      if (!login) {
+        return res.status(404).json({
+          success: false,
+          server: req.serverInfo,
+          error: 'Login record not found'
+        });
+      }
+
+      const emailSummary = login.getLoginAlertEmailSummary();
+      
+      res.json({
+        success: true,
+        server: req.serverInfo,
+        data: {
+          loginId: login._id,
+          username: login.username,
+          email: login.email,
+          loginAlertEmail: emailSummary,
+          fullHistory: login.loginAlertEmail?.deliveryHistory || []
+        }
+      });
+    } catch (error) {
+      logger.error(`Error fetching login alert email status: ${error.message}`, req.serverInfo);
+      next(error);
+    }
+  }
+
+  async getFailedLoginAlertEmails(req, res, next) {
+    try {
+      const { limit = 20, skip = 0 } = req.query;
+      
+      const failedEmails = await Login.getFailedLoginAlertEmails()
+        .limit(parseInt(limit))
+        .skip(parseInt(skip));
+      
+      const total = await Login.countDocuments({ 'loginAlertEmail.status': 'failed' });
+      
+      res.json({
+        success: true,
+        server: req.serverInfo,
+        data: failedEmails.map(login => ({
+          loginId: login._id,
+          username: login.username,
+          email: login.email,
+          createdAt: login.createdAt,
+          loginAlertEmail: login.getLoginAlertEmailSummary()
+        })),
+        pagination: {
+          total,
+          limit: parseInt(limit),
+          skip: parseInt(skip),
+          pages: Math.ceil(total / parseInt(limit))
+        }
+      });
+    } catch (error) {
+      logger.error(`Error fetching failed login alert emails: ${error.message}`, req.serverInfo);
+      next(error);
+    }
+  }
+
+  async getPendingLoginAlertEmails(req, res, next) {
+    try {
+      const { limit = 20, skip = 0 } = req.query;
+      
+      const pendingEmails = await Login.getPendingLoginAlertEmails()
+        .limit(parseInt(limit))
+        .skip(parseInt(skip));
+      
+      const total = await Login.countDocuments({ 
+        'loginAlertEmail.status': { $in: ['pending', 'queued', 'sending'] } 
+      });
+      
+      res.json({
+        success: true,
+        server: req.serverInfo,
+        data: pendingEmails.map(login => ({
+          loginId: login._id,
+          username: login.username,
+          email: login.email,
+          createdAt: login.createdAt,
+          loginAlertEmail: login.getLoginAlertEmailSummary()
+        })),
+        pagination: {
+          total,
+          limit: parseInt(limit),
+          skip: parseInt(skip),
+          pages: Math.ceil(total / parseInt(limit))
+        }
+      });
+    } catch (error) {
+      logger.error(`Error fetching pending login alert emails: ${error.message}`, req.serverInfo);
       next(error);
     }
   }

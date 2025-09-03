@@ -2,6 +2,7 @@ const { Worker } = require('bullmq');
 const emailService = require('../services/emailService');
 const EmailNotification = require('../models/emailNotification.model');
 const Signup = require('../models/signups.model');
+const Login = require('../models/logins.model');
 const ResetPassword = require('../models/resetPasswords.model');
 const queueManager = require('../queues');
 const config = require('../config');
@@ -132,6 +133,15 @@ class MailWorker {
         }
       }
 
+      // Update login record if this is a login alert email
+      let login = null;
+      if (jobData.type === 'login' && jobData.originalData.loginId) {
+        login = await Login.findById(jobData.originalData.loginId);
+        if (login) {
+          await login.markLoginAlertEmailSending(queueName);
+        }
+      }
+
       // Send email using the HTML content we have
       let result;
       result = await emailService.sendEmail({
@@ -153,6 +163,12 @@ class MailWorker {
       if (resetPassword) {
         await resetPassword.markEmailDelivered();
         logger.info(`Reset password email delivered successfully for ${resetPassword.email}`, 'MAIL-WORKER');
+      }
+      
+      // Update login record on successful delivery
+      if (login) {
+        await login.markLoginAlertEmailDelivered(result.messageId, result.response);
+        logger.info(`Login alert email delivered successfully for ${login.email}`, 'MAIL-WORKER');
       }
       
       logger.success(`Email delivered successfully: ${job.id}`, 'MAIL-WORKER');
@@ -189,6 +205,19 @@ class MailWorker {
             }
           } catch (resetError) {
             logger.error(`Failed to update reset password email status: ${resetError.message}`, 'MAIL-WORKER');
+          }
+        }
+        
+        // Update login record on failure if this is a login alert email
+        if (jobData.type === 'login' && jobData.originalData.loginId) {
+          try {
+            const login = await Login.findById(jobData.originalData.loginId);
+            if (login) {
+              await login.markLoginAlertEmailFailed(error.message, queueName);
+              logger.warn(`Login alert email failed for ${login.email}: ${error.message}`, 'MAIL-WORKER');
+            }
+          } catch (loginError) {
+            logger.error(`Failed to update login alert email status: ${loginError.message}`, 'MAIL-WORKER');
           }
         }
         

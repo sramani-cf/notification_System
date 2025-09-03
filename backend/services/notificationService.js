@@ -146,8 +146,10 @@ class NotificationService {
       subject: this.generateEmailSubject(type),
       originalData: { 
         ...data,
-        // Add resetPasswordId for reset password emails to enable callback tracking
-        resetPasswordId: options.resetPasswordId || null
+        // Add IDs for different email types to enable callback tracking
+        resetPasswordId: options.resetPasswordId || null,
+        loginId: options.loginId || null,
+        signupId: options.signupId || null
       },
       serverInfo: options.serverInfo || 'NOTIFICATION-SERVICE',
       processedBy: `${options.serverInfo || 'NOTIFICATION-SERVICE'}-${Date.now()}`,
