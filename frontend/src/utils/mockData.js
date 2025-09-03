@@ -23,7 +23,7 @@ export const generateMockData = () => {
     device: ['Chrome on Windows', 'Safari on MacOS', 'Mobile App'][Math.floor(Math.random() * 3)],
     timestamp: new Date().toISOString(),
   },
-  resetPassword: {
+  reset_password: {
     type: 'reset_password',
     userId: Math.floor(Math.random() * 10000),
     email: `ramanisahil.cf@gmail.com`, //`user${Math.floor(Math.random() * 1000)}@example.com`,

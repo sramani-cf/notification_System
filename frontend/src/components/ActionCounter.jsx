@@ -15,7 +15,7 @@ const ActionCounter = ({ clickCounters, totalClicks, onClearCounters, bulkCount,
           <div className="text-sm space-x-3">
             <span className="text-green-600 dark:text-green-400">Signup: {clickCounters.signup}</span>
             <span className="text-blue-600 dark:text-blue-400">Login: {clickCounters.login}</span>
-            <span className="text-yellow-600 dark:text-yellow-400">Reset: {clickCounters.resetPassword}</span>
+            <span className="text-yellow-600 dark:text-yellow-400">Reset: {clickCounters.reset_password}</span>
             <span className="text-purple-600 dark:text-purple-400">Purchase: {clickCounters.purchase}</span>
             <span className="text-indigo-600 dark:text-indigo-400">Friend: {clickCounters.friendRequest}</span>
           </div>

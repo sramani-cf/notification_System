@@ -14,7 +14,7 @@ export const useNotifications = () => {
   const [clickCounters, setClickCounters] = useState({
     signup: 0,
     login: 0,
-    resetPassword: 0,
+    reset_password: 0,
     purchase: 0,
     friendRequest: 0
   });
@@ -139,7 +139,7 @@ export const useNotifications = () => {
     setClickCounters({
       signup: 0,
       login: 0,
-      resetPassword: 0,
+      reset_password: 0,
       purchase: 0,
       friendRequest: 0
     });

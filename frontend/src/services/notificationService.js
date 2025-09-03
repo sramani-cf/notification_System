@@ -14,7 +14,6 @@ class NotificationService {
       signup: '/api/signups',
       login: '/api/logins',
       reset_password: '/api/reset-passwords',
-      resetPassword: '/api/reset-passwords',
       purchase: '/api/purchases',
       friend_request: '/api/friend-requests',
       friendRequest: '/api/friend-requests'
