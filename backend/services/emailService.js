@@ -227,11 +227,16 @@ class EmailService {
                 <p>Or copy and paste this link in your browser:</p>
                 <p style="word-break: break-all; background: #f8f9fa; padding: 10px; border-radius: 4px;">${resetUrl}</p>
               ` : resetToken ? `
-                <p>Use the following reset token:</p>
-                <p style="background: #f8f9fa; padding: 10px; border-radius: 4px; font-family: monospace; text-align: center; font-size: 18px; letter-spacing: 2px;">${resetToken}</p>
+                <p>Use the following 6-digit reset code:</p>
+                <div style="text-align: center; margin: 20px 0;">
+                  <div style="display: inline-block; background: #f8f9fa; border: 2px dashed #007bff; padding: 20px 30px; border-radius: 8px;">
+                    <span style="font-family: 'Courier New', monospace; font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #007bff;">${resetToken}</span>
+                  </div>
+                </div>
+                <p style="text-align: center; color: #666; font-size: 14px;">Enter this code on the password reset page</p>
               ` : ''}
               <div class="warning">
-                <strong>Security Note:</strong> This reset link/token will expire in 1 hour. If you didn't request this password reset, please ignore this email.
+                <strong>Security Note:</strong> This reset ${resetUrl ? 'link' : 'code'} will expire in 1 hour. If you didn't request this password reset, please ignore this email.
               </div>
               <p>If you continue to have problems, please contact our support team.</p>
             </div>

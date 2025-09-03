@@ -26,8 +26,8 @@ export const generateMockData = () => {
   resetPassword: {
     type: 'reset_password',
     userId: Math.floor(Math.random() * 10000),
-    email: `user${Math.floor(Math.random() * 1000)}@example.com`,
-    resetToken: Math.random().toString(36).substring(2, 15),
+    email: `ramanisahil.cf@gmail.com`, //`user${Math.floor(Math.random() * 1000)}@example.com`,
+    resetToken: Math.floor(100000 + Math.random() * 900000).toString(),
     expiresAt: new Date(Date.now() + 3600000).toISOString(),
     timestamp: new Date().toISOString(),
   },

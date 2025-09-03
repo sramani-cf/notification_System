@@ -89,6 +89,37 @@ const resetPasswordSchema = new mongoose.Schema({
     type: String,
     required: false
   },
+  emailNotification: {
+    emailSent: {
+      type: Boolean,
+      default: false
+    },
+    emailSentAt: {
+      type: Date,
+      default: null
+    },
+    emailDeliveryStatus: {
+      type: String,
+      enum: ['pending', 'sent', 'delivered', 'failed'],
+      default: 'pending'
+    },
+    emailMessageId: {
+      type: String,
+      default: null
+    },
+    emailFailureReason: {
+      type: String,
+      default: null
+    },
+    emailAttempts: {
+      type: Number,
+      default: 0
+    },
+    lastEmailAttemptAt: {
+      type: Date,
+      default: null
+    }
+  },
   metadata: {
     type: Map,
     of: mongoose.Schema.Types.Mixed
@@ -145,6 +176,32 @@ resetPasswordSchema.methods.incrementAttempt = function() {
   if (this.attemptCount >= this.maxAttempts) {
     return this.invalidate('Max attempts exceeded');
   }
+  return this.save();
+};
+
+resetPasswordSchema.methods.markEmailSent = function(messageId) {
+  this.emailNotification = this.emailNotification || {};
+  this.emailNotification.emailSent = true;
+  this.emailNotification.emailSentAt = new Date();
+  this.emailNotification.emailDeliveryStatus = 'sent';
+  this.emailNotification.emailMessageId = messageId;
+  this.emailNotification.emailAttempts = (this.emailNotification.emailAttempts || 0) + 1;
+  this.emailNotification.lastEmailAttemptAt = new Date();
+  return this.save();
+};
+
+resetPasswordSchema.methods.markEmailDelivered = function() {
+  this.emailNotification = this.emailNotification || {};
+  this.emailNotification.emailDeliveryStatus = 'delivered';
+  return this.save();
+};
+
+resetPasswordSchema.methods.markEmailFailed = function(reason) {
+  this.emailNotification = this.emailNotification || {};
+  this.emailNotification.emailDeliveryStatus = 'failed';
+  this.emailNotification.emailFailureReason = reason;
+  this.emailNotification.emailAttempts = (this.emailNotification.emailAttempts || 0) + 1;
+  this.emailNotification.lastEmailAttemptAt = new Date();
   return this.save();
 };
 

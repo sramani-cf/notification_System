@@ -2,6 +2,7 @@ const { Worker } = require('bullmq');
 const emailService = require('../services/emailService');
 const EmailNotification = require('../models/emailNotification.model');
 const Signup = require('../models/signups.model');
+const ResetPassword = require('../models/resetPasswords.model');
 const queueManager = require('../queues');
 const config = require('../config');
 const logger = require('../utils/logger');
@@ -119,6 +120,18 @@ class MailWorker {
         }
       }
 
+      // Update reset password record if this is a reset password email
+      let resetPassword = null;
+      if (jobData.type === 'reset_password' && jobData.originalData.resetPasswordId) {
+        resetPassword = await ResetPassword.findById(jobData.originalData.resetPasswordId);
+        if (resetPassword) {
+          // Mark that email sending is in progress
+          resetPassword.emailNotification = resetPassword.emailNotification || {};
+          resetPassword.emailNotification.lastEmailAttemptAt = new Date();
+          await resetPassword.save();
+        }
+      }
+
       // Send email using the HTML content we have
       let result;
       result = await emailService.sendEmail({
@@ -134,6 +147,12 @@ class MailWorker {
       // Update signup record on successful delivery
       if (signup) {
         await signup.markWelcomeEmailDelivered(result.messageId, result.response);
+      }
+      
+      // Update reset password record on successful delivery
+      if (resetPassword) {
+        await resetPassword.markEmailDelivered();
+        logger.info(`Reset password email delivered successfully for ${resetPassword.email}`, 'MAIL-WORKER');
       }
       
       logger.success(`Email delivered successfully: ${job.id}`, 'MAIL-WORKER');
@@ -157,6 +176,19 @@ class MailWorker {
             }
           } catch (signupError) {
             logger.error(`Failed to update signup email status: ${signupError.message}`, 'MAIL-WORKER');
+          }
+        }
+        
+        // Update reset password record on failure if this is a reset password email
+        if (jobData.type === 'reset_password' && jobData.originalData.resetPasswordId) {
+          try {
+            const resetPassword = await ResetPassword.findById(jobData.originalData.resetPasswordId);
+            if (resetPassword) {
+              await resetPassword.markEmailFailed(error.message);
+              logger.warn(`Reset password email failed for ${resetPassword.email}: ${error.message}`, 'MAIL-WORKER');
+            }
+          } catch (resetError) {
+            logger.error(`Failed to update reset password email status: ${resetError.message}`, 'MAIL-WORKER');
           }
         }
         
@@ -437,11 +469,16 @@ class MailWorker {
                 <p>Or copy and paste this link in your browser:</p>
                 <p style="word-break: break-all; background: #f8f9fa; padding: 10px; border-radius: 4px;">${resetUrl}</p>
               ` : resetToken ? `
-                <p>Use the following reset token:</p>
-                <p style="background: #f8f9fa; padding: 10px; border-radius: 4px; font-family: monospace; text-align: center; font-size: 18px; letter-spacing: 2px;">${resetToken}</p>
+                <p>Use the following 6-digit reset code:</p>
+                <div style="text-align: center; margin: 20px 0;">
+                  <div style="display: inline-block; background: #f8f9fa; border: 2px dashed #007bff; padding: 20px 30px; border-radius: 8px;">
+                    <span style="font-family: 'Courier New', monospace; font-size: 32px; font-weight: bold; letter-spacing: 8px; color: #007bff;">${resetToken}</span>
+                  </div>
+                </div>
+                <p style="text-align: center; color: #666; font-size: 14px;">Enter this code on the password reset page</p>
               ` : ''}
               <div class="warning">
-                <strong>Security Note:</strong> This reset link/token will expire in 1 hour. If you didn't request this password reset, please ignore this email.
+                <strong>Security Note:</strong> This reset ${resetUrl ? 'link' : 'code'} will expire in 1 hour. If you didn't request this password reset, please ignore this email.
               </div>
               <p>If you continue to have problems, please contact our support team.</p>
             </div>

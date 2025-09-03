@@ -144,7 +144,11 @@ class NotificationService {
         username: data.username || null
       },
       subject: this.generateEmailSubject(type),
-      originalData: { ...data },
+      originalData: { 
+        ...data,
+        // Add resetPasswordId for reset password emails to enable callback tracking
+        resetPasswordId: options.resetPasswordId || null
+      },
       serverInfo: options.serverInfo || 'NOTIFICATION-SERVICE',
       processedBy: `${options.serverInfo || 'NOTIFICATION-SERVICE'}-${Date.now()}`,
       createdAt: new Date().toISOString()

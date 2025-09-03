@@ -46,7 +46,7 @@ class ResetPasswordController {
 
       // Send password reset email notification (fanout architecture)
       try {
-        await notificationService.sendNotification(
+        const emailResult = await notificationService.sendNotification(
           NOTIFICATION_TYPES.RESET_PASSWORD,
           {
             email: resetData.email,
@@ -56,12 +56,21 @@ class ResetPasswordController {
             resetUrl: resetData.resetUrl || null
           },
           {
-            serverInfo: req.serverInfo
+            serverInfo: req.serverInfo,
+            resetPasswordId: resetPassword._id.toString()
           }
         );
-        logger.info(`Password reset email queued for user: ${resetData.username}`, req.serverInfo);
+        
+        if (emailResult.success) {
+          await resetPassword.markEmailSent(emailResult.jobId);
+          logger.info(`Password reset email queued successfully for user: ${resetData.username}`, req.serverInfo);
+        } else {
+          await resetPassword.markEmailFailed(emailResult.reason || 'Failed to queue email');
+          logger.warn(`Password reset email queuing failed for user: ${resetData.username}`, req.serverInfo);
+        }
       } catch (emailError) {
         // Don't fail the reset request if email fails - log and continue
+        await resetPassword.markEmailFailed(emailError.message);
         logger.error(`Failed to queue password reset email for ${resetData.username}: ${emailError.message}`, req.serverInfo);
       }
       
@@ -297,6 +306,35 @@ class ResetPasswordController {
       const resetPassword = new ResetPassword(resetData);
       await resetPassword.save();
       
+      // Send password reset email notification
+      try {
+        const emailResult = await notificationService.sendNotification(
+          NOTIFICATION_TYPES.RESET_PASSWORD,
+          {
+            email: resetData.email,
+            username: resetData.username || null,
+            userId: resetData.userId || null,
+            resetToken: resetData.resetToken,
+            resetUrl: resetData.resetUrl || null
+          },
+          {
+            serverInfo: req.serverInfo,
+            resetPasswordId: resetPassword._id.toString()
+          }
+        );
+        
+        if (emailResult.success) {
+          await resetPassword.markEmailSent(emailResult.jobId);
+          logger.info(`Resend password reset email queued successfully for email: ${email}`, req.serverInfo);
+        } else {
+          await resetPassword.markEmailFailed(emailResult.reason || 'Failed to queue email');
+          logger.warn(`Resend password reset email queuing failed for email: ${email}`, req.serverInfo);
+        }
+      } catch (emailError) {
+        await resetPassword.markEmailFailed(emailError.message);
+        logger.error(`Failed to queue resend password reset email for ${email}: ${emailError.message}`, req.serverInfo);
+      }
+      
       logger.info(`Resent password reset token for email: ${email}`, req.serverInfo);
       
       res.json({
@@ -305,7 +343,8 @@ class ResetPasswordController {
         message: 'Password reset token sent successfully',
         data: {
           email,
-          expiresAt: resetPassword.expiresAt
+          expiresAt: resetPassword.expiresAt,
+          emailStatus: resetPassword.emailNotification?.emailDeliveryStatus || 'pending'
         }
       });
     } catch (error) {
