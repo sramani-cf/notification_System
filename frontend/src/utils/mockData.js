@@ -9,7 +9,7 @@ export const generateMockData = () => {
     type: 'signup',
     userId: Math.floor(Math.random() * 10000),
     username: `user_${Math.random().toString(36).substring(7)}`,
-    email: `ramanisahil.cf@gmail.com`, //`user${Math.floor(Math.random() * 1000)}@example.com`,
+    email: `user${Math.floor(Math.random() * 1000)}@example.com`,
     password: `Pass${Math.random().toString(36).substring(2, 10)}!`,
     timestamp: new Date().toISOString(),
   },
