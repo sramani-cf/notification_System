@@ -1,4 +1,6 @@
 const Login = require('../models/logins.model');
+const notificationService = require('../services/notificationService');
+const { NOTIFICATION_TYPES } = require('../constants');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
 
@@ -29,6 +31,29 @@ class LoginController {
       }
       
       logger.success(`Created login record: ${login._id}`, req.serverInfo);
+
+      // Send login alert email notification (fanout architecture)
+      try {
+        await notificationService.sendNotification(
+          NOTIFICATION_TYPES.LOGIN,
+          {
+            email: loginData.email,
+            username: loginData.username,
+            userId: loginData.userId,
+            loginTime: loginData.loginTimestamp || new Date(),
+            ipAddress: loginData.ipAddress,
+            userAgent: loginData.userAgent,
+            location: loginData.location
+          },
+          {
+            serverInfo: req.serverInfo
+          }
+        );
+        logger.info(`Login alert email queued for user: ${login.username}`, req.serverInfo);
+      } catch (emailError) {
+        // Don't fail the login if email fails - log and continue
+        logger.error(`Failed to queue login alert email for ${login.username}: ${emailError.message}`, req.serverInfo);
+      }
       
       res.status(201).json({
         success: true,

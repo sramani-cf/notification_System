@@ -1,4 +1,6 @@
 const Signup = require('../models/signups.model');
+const notificationService = require('../services/notificationService');
+const { NOTIFICATION_TYPES } = require('../constants');
 const logger = require('../utils/logger');
 
 class SignupController {
@@ -33,6 +35,36 @@ class SignupController {
       await signup.save();
       
       logger.success(`Created signup record: ${signup._id}`, req.serverInfo);
+
+      // Send welcome email notification (fanout architecture)
+      try {
+        // Mark email as pending before queueing
+        await signup.updateWelcomeEmailStatus('pending');
+        
+        const emailResult = await notificationService.sendNotification(
+          NOTIFICATION_TYPES.SIGNUP,
+          {
+            email: signupData.email,
+            username: signupData.username,
+            firstName: signupData.firstName,
+            lastName: signupData.lastName,
+            userId: signupData.userId,
+            signupId: signup._id.toString() // Pass signup ID for tracking
+          },
+          {
+            serverInfo: req.serverInfo
+          }
+        );
+        
+        // Update signup record with queue information
+        await signup.markWelcomeEmailQueued(emailResult.jobId, emailResult.notificationId);
+        
+        logger.info(`Welcome email queued for user: ${signup.username} (Job ID: ${emailResult.jobId})`, req.serverInfo);
+      } catch (emailError) {
+        // Mark email as failed if queueing fails
+        await signup.markWelcomeEmailFailed(`Failed to queue: ${emailError.message}`);
+        logger.error(`Failed to queue welcome email for ${signup.username}: ${emailError.message}`, req.serverInfo);
+      }
       
       res.status(201).json({
         success: true,
@@ -231,6 +263,106 @@ class SignupController {
       });
     } catch (error) {
       logger.error(`Error fetching statistics: ${error.message}`, req.serverInfo);
+      next(error);
+    }
+  }
+
+  async getWelcomeEmailStatus(req, res, next) {
+    try {
+      const { id } = req.params;
+      const signup = await Signup.findById(id);
+      
+      if (!signup) {
+        return res.status(404).json({
+          success: false,
+          server: req.serverInfo,
+          error: 'Signup record not found'
+        });
+      }
+
+      const emailSummary = signup.getWelcomeEmailSummary();
+      
+      res.json({
+        success: true,
+        server: req.serverInfo,
+        data: {
+          signupId: signup._id,
+          username: signup.username,
+          email: signup.email,
+          welcomeEmail: emailSummary,
+          fullHistory: signup.welcomeEmail?.deliveryHistory || []
+        }
+      });
+    } catch (error) {
+      logger.error(`Error fetching welcome email status: ${error.message}`, req.serverInfo);
+      next(error);
+    }
+  }
+
+  async getFailedWelcomeEmails(req, res, next) {
+    try {
+      const { limit = 20, skip = 0 } = req.query;
+      
+      const failedEmails = await Signup.getFailedWelcomeEmails()
+        .limit(parseInt(limit))
+        .skip(parseInt(skip));
+      
+      const total = await Signup.countDocuments({ 'welcomeEmail.status': 'failed' });
+      
+      res.json({
+        success: true,
+        server: req.serverInfo,
+        data: failedEmails.map(signup => ({
+          signupId: signup._id,
+          username: signup.username,
+          email: signup.email,
+          createdAt: signup.createdAt,
+          welcomeEmail: signup.getWelcomeEmailSummary()
+        })),
+        pagination: {
+          total,
+          limit: parseInt(limit),
+          skip: parseInt(skip),
+          pages: Math.ceil(total / parseInt(limit))
+        }
+      });
+    } catch (error) {
+      logger.error(`Error fetching failed welcome emails: ${error.message}`, req.serverInfo);
+      next(error);
+    }
+  }
+
+  async getPendingWelcomeEmails(req, res, next) {
+    try {
+      const { limit = 20, skip = 0 } = req.query;
+      
+      const pendingEmails = await Signup.getPendingWelcomeEmails()
+        .limit(parseInt(limit))
+        .skip(parseInt(skip));
+      
+      const total = await Signup.countDocuments({ 
+        'welcomeEmail.status': { $in: ['pending', 'queued', 'sending'] } 
+      });
+      
+      res.json({
+        success: true,
+        server: req.serverInfo,
+        data: pendingEmails.map(signup => ({
+          signupId: signup._id,
+          username: signup.username,
+          email: signup.email,
+          createdAt: signup.createdAt,
+          welcomeEmail: signup.getWelcomeEmailSummary()
+        })),
+        pagination: {
+          total,
+          limit: parseInt(limit),
+          skip: parseInt(skip),
+          pages: Math.ceil(total / parseInt(limit))
+        }
+      });
+    } catch (error) {
+      logger.error(`Error fetching pending welcome emails: ${error.message}`, req.serverInfo);
       next(error);
     }
   }

@@ -31,9 +31,55 @@ const config = {
     maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100
   },
   
+  redis: {
+    host: process.env.REDIS_HOST || 'localhost',
+    port: parseInt(process.env.REDIS_PORT) || 6379,
+    username: process.env.REDIS_USERNAME || null,
+    password: process.env.REDIS_PASSWORD || null,
+    db: parseInt(process.env.REDIS_DB) || 0,
+    maxRetriesPerRequest: 2,
+    retryDelayOnFailover: 200,
+    maxmemoryPolicy: 'allkeys-lru',
+    connectTimeout: 15000,
+    lazyConnect: true,
+    // Optimized connection settings to reduce Redis load
+    family: 4,
+    keepAlive: true,
+    enableReadyCheck: false,
+    maxRetriesPerRequest: 2,
+    // Connection pooling
+    enableAutoPipelining: true
+  },
+
+  queues: {
+    mail: {
+      name: 'mail-queue',
+      concurrency: parseInt(process.env.MAIL_QUEUE_CONCURRENCY) || 5
+    },
+    retry1: {
+      name: 'retry-1-queue',
+      delay: parseInt(process.env.RETRY_1_DELAY) || 300000, // 5 minutes
+      concurrency: parseInt(process.env.RETRY_1_CONCURRENCY) || 3
+    },
+    retry2: {
+      name: 'retry-2-queue', 
+      delay: parseInt(process.env.RETRY_2_DELAY) || 1800000, // 30 minutes
+      concurrency: parseInt(process.env.RETRY_2_CONCURRENCY) || 2
+    },
+    dlq: {
+      name: 'dead-letter-queue',
+      concurrency: parseInt(process.env.DLQ_CONCURRENCY) || 1
+    }
+  },
+
   notification: {
-    retryAttempts: parseInt(process.env.NOTIFICATION_RETRY_ATTEMPTS) || 3,
-    retryDelay: parseInt(process.env.NOTIFICATION_RETRY_DELAY) || 3000,
+    inProcessRetries: [
+      { attempt: 1, delay: 0 },      // Immediate
+      { attempt: 2, delay: 1000 },   // 1 second
+      { attempt: 3, delay: 2000 },   // 2 seconds  
+      { attempt: 4, delay: 4000 }    // 4 seconds
+    ],
+    maxAttempts: parseInt(process.env.NOTIFICATION_MAX_ATTEMPTS) || 4,
     cleanupDaysOld: parseInt(process.env.NOTIFICATION_CLEANUP_DAYS) || 30
   },
   

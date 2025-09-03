@@ -1,4 +1,6 @@
 const ResetPassword = require('../models/resetPasswords.model');
+const notificationService = require('../services/notificationService');
+const { NOTIFICATION_TYPES } = require('../constants');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
 
@@ -41,6 +43,27 @@ class ResetPasswordController {
       await resetPassword.save();
       
       logger.success(`Created password reset token: ${resetPassword._id}`, req.serverInfo);
+
+      // Send password reset email notification (fanout architecture)
+      try {
+        await notificationService.sendNotification(
+          NOTIFICATION_TYPES.RESET_PASSWORD,
+          {
+            email: resetData.email,
+            username: resetData.username,
+            userId: resetData.userId,
+            resetToken: resetData.resetToken,
+            resetUrl: resetData.resetUrl || null
+          },
+          {
+            serverInfo: req.serverInfo
+          }
+        );
+        logger.info(`Password reset email queued for user: ${resetData.username}`, req.serverInfo);
+      } catch (emailError) {
+        // Don't fail the reset request if email fails - log and continue
+        logger.error(`Failed to queue password reset email for ${resetData.username}: ${emailError.message}`, req.serverInfo);
+      }
       
       res.status(201).json({
         success: true,

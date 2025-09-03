@@ -3,6 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const { connectDB } = require('../config/db');
 const apiRoutes = require('../routes');
+const notificationService = require('../services/notificationService');
+const mailWorker = require('../workers/mailWorker');
 const logger = require('../utils/logger');
 
 const app = express();
@@ -73,7 +75,22 @@ app.use((err, req, res, next) => {
 
 const startServer = async () => {
   try {
+    // Initialize database connection
     await connectDB(SERVER_NAME);
+    
+    // Initialize notification system (queues, workers, email service)
+    logger.info('Initializing notification system...', SERVER_NAME);
+    
+    try {
+      await notificationService.initialize();
+      logger.success('Notification service initialized', SERVER_NAME);
+      
+      await mailWorker.initialize();
+      logger.success('Mail workers initialized', SERVER_NAME);
+    } catch (notificationError) {
+      logger.error(`Notification system initialization failed: ${notificationError.message}`, SERVER_NAME);
+      // Continue server startup even if notifications fail
+    }
     
     const server = app.listen(PORT, () => {
       logger.success(`${SERVER_NAME} running on port ${PORT}`, SERVER_NAME);
@@ -81,20 +98,34 @@ const startServer = async () => {
       logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`, SERVER_NAME);
     });
     
-    process.on('SIGTERM', () => {
-      logger.info('SIGTERM signal received: closing HTTP server', SERVER_NAME);
-      server.close(() => {
+    const gracefulShutdown = async () => {
+      logger.info('Starting graceful shutdown...', SERVER_NAME);
+      
+      // Close HTTP server first
+      server.close(async () => {
         logger.info('HTTP server closed', SERVER_NAME);
+        
+        // Close notification system
+        try {
+          await mailWorker.closeWorkers();
+          await notificationService.shutdown();
+          logger.info('Notification system shutdown complete', SERVER_NAME);
+        } catch (shutdownError) {
+          logger.error(`Error during notification system shutdown: ${shutdownError.message}`, SERVER_NAME);
+        }
+        
         process.exit(0);
       });
+    };
+    
+    process.on('SIGTERM', () => {
+      logger.info('SIGTERM signal received: closing HTTP server', SERVER_NAME);
+      gracefulShutdown();
     });
     
     process.on('SIGINT', () => {
       logger.info('SIGINT signal received: closing HTTP server', SERVER_NAME);
-      server.close(() => {
-        logger.info('HTTP server closed', SERVER_NAME);
-        process.exit(0);
-      });
+      gracefulShutdown();
     });
     
     process.on('unhandledRejection', (reason, promise) => {

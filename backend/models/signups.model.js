@@ -59,6 +59,60 @@ const signupSchema = new mongoose.Schema({
     type: String,
     required: false
   },
+  // Email delivery tracking fields
+  welcomeEmail: {
+    status: {
+      type: String,
+      enum: ['pending', 'queued', 'sending', 'delivered', 'failed', 'not_sent'],
+      default: 'not_sent',
+      index: true
+    },
+    attempts: {
+      type: Number,
+      default: 0
+    },
+    lastAttemptAt: {
+      type: Date,
+      default: null
+    },
+    deliveredAt: {
+      type: Date,
+      default: null
+    },
+    failedAt: {
+      type: Date,
+      default: null
+    },
+    failureReason: {
+      type: String,
+      default: null
+    },
+    messageId: {
+      type: String,
+      default: null
+    },
+    notificationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'EmailNotification',
+      default: null,
+      index: true
+    },
+    queueJobId: {
+      type: String,
+      default: null
+    },
+    smtpResponse: {
+      type: String,
+      default: null
+    },
+    deliveryHistory: [{
+      attempt: Number,
+      timestamp: Date,
+      status: String,
+      error: String,
+      queueName: String
+    }]
+  },
   metadata: {
     type: Map,
     of: mongoose.Schema.Types.Mixed
@@ -88,7 +142,76 @@ signupSchema.pre('save', function(next) {
   next();
 });
 
-// Instance methods
+// Instance methods for email delivery tracking
+signupSchema.methods.updateWelcomeEmailStatus = function(status, details = {}) {
+  this.welcomeEmail = this.welcomeEmail || {};
+  this.welcomeEmail.status = status;
+  
+  // Add to delivery history
+  this.welcomeEmail.deliveryHistory = this.welcomeEmail.deliveryHistory || [];
+  this.welcomeEmail.deliveryHistory.push({
+    attempt: this.welcomeEmail.attempts + 1,
+    timestamp: new Date(),
+    status: status,
+    error: details.error || null,
+    queueName: details.queueName || 'mail'
+  });
+  
+  // Update specific fields based on status
+  switch (status) {
+    case 'queued':
+      this.welcomeEmail.queueJobId = details.jobId;
+      this.welcomeEmail.notificationId = details.notificationId;
+      break;
+    case 'sending':
+      this.welcomeEmail.attempts += 1;
+      this.welcomeEmail.lastAttemptAt = new Date();
+      break;
+    case 'delivered':
+      this.welcomeEmail.deliveredAt = new Date();
+      this.welcomeEmail.messageId = details.messageId;
+      this.welcomeEmail.smtpResponse = details.smtpResponse;
+      break;
+    case 'failed':
+      this.welcomeEmail.failedAt = new Date();
+      this.welcomeEmail.failureReason = details.error || 'Unknown error';
+      this.welcomeEmail.attempts += 1;
+      this.welcomeEmail.lastAttemptAt = new Date();
+      break;
+  }
+  
+  return this.save();
+};
+
+signupSchema.methods.markWelcomeEmailQueued = function(jobId, notificationId) {
+  return this.updateWelcomeEmailStatus('queued', { jobId, notificationId });
+};
+
+signupSchema.methods.markWelcomeEmailSending = function(queueName = 'mail') {
+  return this.updateWelcomeEmailStatus('sending', { queueName });
+};
+
+signupSchema.methods.markWelcomeEmailDelivered = function(messageId, smtpResponse) {
+  return this.updateWelcomeEmailStatus('delivered', { messageId, smtpResponse });
+};
+
+signupSchema.methods.markWelcomeEmailFailed = function(error, queueName = 'mail') {
+  return this.updateWelcomeEmailStatus('failed', { error, queueName });
+};
+
+signupSchema.methods.getWelcomeEmailSummary = function() {
+  return {
+    status: this.welcomeEmail?.status || 'not_sent',
+    attempts: this.welcomeEmail?.attempts || 0,
+    lastAttemptAt: this.welcomeEmail?.lastAttemptAt,
+    deliveredAt: this.welcomeEmail?.deliveredAt,
+    failedAt: this.welcomeEmail?.failedAt,
+    messageId: this.welcomeEmail?.messageId,
+    failureReason: this.welcomeEmail?.failureReason,
+    totalHistoryEntries: this.welcomeEmail?.deliveryHistory?.length || 0
+  };
+};
+
 signupSchema.methods.toJSON = function() {
   const obj = this.toObject();
   if (obj.metadata instanceof Map) {
@@ -140,6 +263,34 @@ signupSchema.statics.getSignupStatistics = async function() {
       }
     }
   ]);
+
+  // Email delivery statistics
+  const emailStats = await this.aggregate([
+    {
+      $group: {
+        _id: null,
+        total: { $sum: 1 },
+        delivered: {
+          $sum: { $cond: [{ $eq: ['$welcomeEmail.status', 'delivered'] }, 1, 0] }
+        },
+        failed: {
+          $sum: { $cond: [{ $eq: ['$welcomeEmail.status', 'failed'] }, 1, 0] }
+        },
+        pending: {
+          $sum: { $cond: [{ $eq: ['$welcomeEmail.status', 'pending'] }, 1, 0] }
+        },
+        queued: {
+          $sum: { $cond: [{ $eq: ['$welcomeEmail.status', 'queued'] }, 1, 0] }
+        },
+        sending: {
+          $sum: { $cond: [{ $eq: ['$welcomeEmail.status', 'sending'] }, 1, 0] }
+        },
+        not_sent: {
+          $sum: { $cond: [{ $eq: ['$welcomeEmail.status', 'not_sent'] }, 1, 0] }
+        }
+      }
+    }
+  ]);
   
   return {
     signups: {
@@ -152,8 +303,31 @@ signupSchema.statics.getSignupStatistics = async function() {
       total: 0,
       verified: 0,
       unverified: 0
+    },
+    welcomeEmails: emailStats[0] || {
+      total: 0,
+      delivered: 0,
+      failed: 0,
+      pending: 0,
+      queued: 0,
+      sending: 0,
+      not_sent: 0
     }
   };
+};
+
+// Get signups with failed welcome emails
+signupSchema.statics.getFailedWelcomeEmails = function() {
+  return this.find({
+    'welcomeEmail.status': 'failed'
+  }).sort({ 'welcomeEmail.failedAt': -1 });
+};
+
+// Get signups with pending welcome emails
+signupSchema.statics.getPendingWelcomeEmails = function() {
+  return this.find({
+    'welcomeEmail.status': { $in: ['pending', 'queued', 'sending'] }
+  }).sort({ createdAt: -1 });
 };
 
 const Signup = mongoose.model('Signup', signupSchema);

@@ -27,6 +27,13 @@ router.route('/statistics')
 router.route('/unverified')
   .get(asyncHandler(signupController.getUnverified));
 
+// Welcome email status routes
+router.route('/welcome-emails/failed')
+  .get(asyncHandler(signupController.getFailedWelcomeEmails));
+
+router.route('/welcome-emails/pending')
+  .get(asyncHandler(signupController.getPendingWelcomeEmails));
+
 // User-specific route
 router.route('/user/:userId')
   .get(
@@ -51,6 +58,13 @@ router.route('/:id')
   .delete(
     validateObjectId,
     asyncHandler(signupController.delete)
+  );
+
+// Welcome email status for specific signup
+router.route('/:id/welcome-email-status')
+  .get(
+    validateObjectId,
+    asyncHandler(signupController.getWelcomeEmailStatus)
   );
 
 module.exports = router;
