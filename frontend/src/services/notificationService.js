@@ -2,8 +2,8 @@ import api from './api';
 import { generateMockData } from '@/utils/mockData';
 
 class NotificationService {
-  async sendNotification(type) {
-    const mockData = generateMockData();
+  async sendNotification(type, user = null) {
+    const mockData = generateMockData(user);
     const data = {
       ...mockData[type],
       timestamp: new Date().toISOString(),

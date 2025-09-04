@@ -2,9 +2,11 @@ require('dotenv').config();
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const axios = require('axios');
+const http = require('http');
 const logger = require('../utils/logger');
 
 const app = express();
+const server = http.createServer(app);
 const PORT = process.env.LOAD_BALANCER_PORT || 8000;
 
 logger.setServerName('BALANCER');
@@ -16,6 +18,85 @@ const servers = [
 ];
 
 let currentServerIndex = 0;
+
+// Store WebSocket connections for sticky sessions
+const wsConnections = new Map(); // socketId -> serverIndex
+const sessionToServer = new Map(); // Socket.IO session ID -> server URL
+const clientToServer = new Map(); // Client IP + User-Agent hash -> server URL
+
+// Extract Socket.IO session ID from request
+const extractSocketIOSessionId = (req) => {
+  const url = new URL(req.url, 'http://localhost');
+  // Use 'sid' parameter which is the actual Socket.IO session ID
+  // 'EIO' is just the Engine.IO version
+  return url.searchParams.get('sid');
+};
+
+// Generate client hash for sticky sessions
+const getClientHash = (req) => {
+  const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress || 'unknown';
+  const userAgent = req.headers['user-agent'] || 'unknown';
+  return `${ip}-${userAgent}`.substring(0, 50); // Limit length
+};
+
+// Get server for Socket.IO with sticky session support
+const getSocketIOServer = (req) => {
+  const sessionId = extractSocketIOSessionId(req);
+  const clientHash = getClientHash(req);
+  
+  // SIMPLIFIED APPROACH: Always route by client hash first, then by session ID
+  // This ensures the same client always goes to the same server
+  
+  // If we have a session ID and it's already mapped, use it
+  if (sessionId && sessionToServer.has(sessionId)) {
+    const serverUrl = sessionToServer.get(sessionId);
+    const server = servers.find(s => s.url === serverUrl);
+    if (server && server.healthy) {
+      logger.info(`Using session mapping: ${sessionId} -> ${server.name}`, 'BALANCER');
+      return server;
+    } else {
+      // Clean up stale session
+      sessionToServer.delete(sessionId);
+      logger.warn(`Cleaned up stale session: ${sessionId}`, 'BALANCER');
+    }
+  }
+  
+  // Use client hash for consistent routing (most important for Socket.IO)
+  if (clientToServer.has(clientHash)) {
+    const serverUrl = clientToServer.get(clientHash);
+    const server = servers.find(s => s.url === serverUrl);
+    if (server && server.healthy) {
+      // If we have a session ID, also map it for faster future lookups
+      if (sessionId && !sessionToServer.has(sessionId)) {
+        sessionToServer.set(sessionId, serverUrl);
+        logger.info(`Added session mapping: ${sessionId} -> ${server.name}`, 'BALANCER');
+      }
+      logger.info(`Using client mapping: ${clientHash.substring(0, 15)}... -> ${server.name}`, 'BALANCER');
+      return server;
+    } else {
+      // Clean up stale client mapping
+      clientToServer.delete(clientHash);
+      logger.warn(`Cleaned up stale client mapping: ${clientHash.substring(0, 15)}...`, 'BALANCER');
+    }
+  }
+  
+  // No existing mapping - create new one
+  const server = getNextHealthyServer();
+  if (server) {
+    // Always create client mapping
+    clientToServer.set(clientHash, server.url);
+    
+    // Also create session mapping if we have a session ID
+    if (sessionId) {
+      sessionToServer.set(sessionId, server.url);
+      logger.info(`Created new mappings: client=${clientHash.substring(0, 15)}..., session=${sessionId} -> ${server.name}`, 'BALANCER');
+    } else {
+      logger.info(`Created new client mapping: ${clientHash.substring(0, 15)}... -> ${server.name}`, 'BALANCER');
+    }
+  }
+  
+  return server;
+};
 
 const getNextHealthyServer = () => {
   const startIndex = currentServerIndex;
@@ -38,10 +119,13 @@ const getNextHealthyServer = () => {
 };
 
 const healthCheck = async () => {
-  for (const server of servers) {
+  const healthPromises = servers.map(async (server) => {
     try {
       const response = await axios.get(`${server.url}/api/health`, {
-        timeout: 5000
+        timeout: 3000, // Reduced timeout for faster detection
+        headers: {
+          'User-Agent': 'LoadBalancer-HealthCheck/1.0'
+        }
       });
       
       if (response.status === 200) {
@@ -49,64 +133,160 @@ const healthCheck = async () => {
           logger.success(`${server.name} is back online`, 'BALANCER');
         }
         server.healthy = true;
+      } else {
+        if (server.healthy) {
+          logger.warn(`${server.name} returned status ${response.status}`, 'BALANCER');
+        }
+        server.healthy = false;
       }
     } catch (error) {
       if (server.healthy) {
-        logger.error(`${server.name} health check failed: ${error.message}`, 'BALANCER');
+        logger.error(`${server.name} health check failed: ${error.code || error.message}`, 'BALANCER');
       }
       server.healthy = false;
     }
+  });
+
+  await Promise.allSettled(healthPromises);
+  
+  const healthyCount = servers.filter(s => s.healthy).length;
+  if (healthyCount === 0) {
+    logger.warn('No healthy servers available!', 'BALANCER');
   }
 };
 
-setInterval(healthCheck, 10000);
+// Start health checks immediately when servers are likely ready
+setTimeout(healthCheck, 5000);
 
-setTimeout(healthCheck, 2000);
+// Run health checks every 5 seconds for faster recovery
+setInterval(healthCheck, 5000);
+
+// Session cleanup - remove stale sessions every 5 minutes
+setInterval(() => {
+  const staleThreshold = 5 * 60 * 1000; // 5 minutes
+  const now = Date.now();
+  
+  let cleanedSessions = 0;
+  let cleanedClients = 0;
+  
+  // Clean up old session mappings (they should be refreshed by active connections)
+  for (const [sessionId, serverUrl] of sessionToServer.entries()) {
+    // For now, we'll keep sessions unless the server is unhealthy
+    const server = servers.find(s => s.url === serverUrl);
+    if (!server || !server.healthy) {
+      sessionToServer.delete(sessionId);
+      cleanedSessions++;
+    }
+  }
+  
+  // Note: Client mappings are kept longer as they help with initial connections
+  // They will be cleaned up when servers become unhealthy
+  
+  if (cleanedSessions > 0 || cleanedClients > 0) {
+    logger.info(`Session cleanup: removed ${cleanedSessions} sessions, ${cleanedClients} clients`, 'BALANCER');
+  }
+}, 5 * 60 * 1000);
 
 // Parse JSON bodies before proxying
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Store routing decisions to avoid conflicts
+const routingCache = new Map();
+
 const proxyOptions = {
   changeOrigin: true,
   logLevel: 'silent',
+  ws: true, // Enable WebSocket proxying
   router: (req) => {
-    const server = getNextHealthyServer();
-    if (!server) {
-      throw new Error('No healthy servers available');
+    // For Socket.IO requests, use sticky session routing
+    if (req.url && req.url.startsWith('/socket.io/')) {
+      const server = getSocketIOServer(req);
+      if (!server) {
+        throw new Error('No healthy servers available for Socket.IO');
+      }
+      return server.url;
     }
-    return server.url;
-  },
-  onError: (err, req, res) => {
-    logger.error(`Proxy error: ${err.message}`, 'BALANCER');
     
-    if (!res.headersSent) {
-      res.status(503).json({
-        error: 'Service temporarily unavailable',
-        message: 'All backend servers are currently down. Please try again later.',
-        timestamp: new Date().toISOString()
-      });
+    // For regular API requests, use round-robin
+    const cacheKey = req.headers['x-request-id'] || `${Date.now()}-${Math.random()}`;
+    
+    if (!routingCache.has(cacheKey)) {
+      const server = getNextHealthyServer();
+      if (!server) {
+        throw new Error('No healthy servers available');
+      }
+      routingCache.set(cacheKey, server.url);
+      
+      // Clean cache after 30 seconds
+      setTimeout(() => routingCache.delete(cacheKey), 30000);
     }
+    
+    return routingCache.get(cacheKey);
   },
   onProxyReq: (proxyReq, req, res) => {
-    const server = getNextHealthyServer();
-    if (server) {
-      proxyReq.setHeader('X-Forwarded-Server', server.name);
-      proxyReq.setHeader('X-Load-Balancer', 'Active');
-      
-      // Fix body parsing for POST/PUT/PATCH requests
-      if (req.body && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH')) {
-        const bodyData = JSON.stringify(req.body);
-        proxyReq.setHeader('Content-Type', 'application/json');
-        proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
-        proxyReq.write(bodyData);
-      }
+    // Add unique request ID for routing consistency
+    const requestId = req.headers['x-request-id'] || `${Date.now()}-${Math.random()}`;
+    proxyReq.setHeader('X-Request-ID', requestId);
+    proxyReq.setHeader('X-Load-Balancer', 'Active');
+    
+    // Log Socket.IO requests for debugging
+    if (req.url && req.url.startsWith('/socket.io/')) {
+      logger.info(`Socket.IO HTTP request: ${req.method} ${req.url}`, 'BALANCER');
+    }
+    
+    // Fix body parsing for POST/PUT/PATCH requests
+    if (req.body && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH')) {
+      const bodyData = JSON.stringify(req.body);
+      proxyReq.setHeader('Content-Type', 'application/json');
+      proxyReq.setHeader('Content-Length', Buffer.byteLength(bodyData));
+      proxyReq.write(bodyData);
     }
   },
   onProxyRes: (proxyRes, req, res) => {
     const serverHeader = proxyRes.headers['x-server-info'];
     if (serverHeader) {
       logger.info(`Response from ${serverHeader}`, 'BALANCER');
+    }
+  },
+  onProxyReqWs: (proxyReq, req, socket, options, head) => {
+    logger.info('WebSocket proxy request initiated', 'BALANCER');
+    
+    // Add unique request ID for WebSocket routing consistency
+    const requestId = req.headers['x-request-id'] || `${Date.now()}-${Math.random()}`;
+    proxyReq.setHeader('X-Request-ID', requestId);
+    proxyReq.setHeader('X-Load-Balancer', 'WebSocket-Active');
+    
+    // Ensure proper WebSocket headers
+    proxyReq.setHeader('Upgrade', 'websocket');
+    proxyReq.setHeader('Connection', 'Upgrade');
+    
+    if (req.headers['sec-websocket-key']) {
+      proxyReq.setHeader('Sec-WebSocket-Key', req.headers['sec-websocket-key']);
+    }
+    if (req.headers['sec-websocket-version']) {
+      proxyReq.setHeader('Sec-WebSocket-Version', req.headers['sec-websocket-version']);
+    }
+    if (req.headers['sec-websocket-protocol']) {
+      proxyReq.setHeader('Sec-WebSocket-Protocol', req.headers['sec-websocket-protocol']);
+    }
+  },
+  onProxyResWs: (proxyRes, proxySocket, proxyHead) => {
+    logger.info('WebSocket proxy response received', 'BALANCER');
+  },
+  onError: (err, req, res, target) => {
+    if (req.upgrade) {
+      logger.error(`WebSocket proxy error: ${err.message}`, 'BALANCER');
+      // WebSocket errors are handled differently, no response object
+    } else {
+      logger.error(`HTTP proxy error: ${err.message}`, 'BALANCER');
+      if (res && !res.headersSent) {
+        res.status(503).json({
+          error: 'Service temporarily unavailable',
+          message: 'All backend servers are currently down. Please try again later.',
+          timestamp: new Date().toISOString()
+        });
+      }
     }
   }
 };
@@ -128,6 +308,12 @@ app.get('/balancer/status', (req, res) => {
     unhealthyServers: servers.length - healthyCount,
     servers: serverStatus,
     currentIndex: currentServerIndex,
+    stickySession: {
+      totalSessions: sessionToServer.size,
+      totalClients: clientToServer.size,
+      sessionMappings: Object.fromEntries(Array.from(sessionToServer.entries()).slice(0, 10)), // Show first 10
+      clientMappings: Object.fromEntries(Array.from(clientToServer.entries()).slice(0, 10)) // Show first 10
+    },
     timestamp: new Date().toISOString()
   });
 });
@@ -175,9 +361,47 @@ app.post('/balancer/servers/:serverName/toggle', (req, res) => {
   });
 });
 
-app.use('/api', createProxyMiddleware(proxyOptions));
+// Create single proxy middleware instance with unified routing
+const proxy = createProxyMiddleware(proxyOptions);
 
-app.use('/', createProxyMiddleware(proxyOptions));
+// Use single proxy for both API and Socket.IO requests
+app.use('/api', proxy);
+app.use('/socket.io', proxy); // Handle Socket.IO HTTP requests (polling transport)
+
+// Handle WebSocket upgrades
+server.on('upgrade', (request, socket, head) => {
+  logger.info(`WebSocket upgrade request received: ${request.url}`, 'BALANCER');
+  
+  try {
+    // Check if we have healthy servers before attempting proxy
+    const healthyServers = servers.filter(s => s.healthy).length;
+    if (healthyServers === 0) {
+      logger.error('No healthy servers available for WebSocket upgrade', 'BALANCER');
+      socket.write('HTTP/1.1 503 Service Unavailable\r\n' +
+                  'Content-Type: text/plain\r\n' +
+                  'Connection: close\r\n' +
+                  '\r\n' +
+                  'No healthy backend servers available');
+      socket.destroy();
+      return;
+    }
+    
+    // Use the proxy for WebSocket upgrades
+    proxy.upgrade(request, socket, head);
+  } catch (error) {
+    logger.error(`WebSocket upgrade error: ${error.message}`, 'BALANCER');
+    try {
+      socket.write('HTTP/1.1 503 Service Unavailable\r\n' +
+                  'Content-Type: text/plain\r\n' +
+                  'Connection: close\r\n' +
+                  '\r\n' +
+                  'WebSocket upgrade failed');
+      socket.destroy();
+    } catch (socketError) {
+      logger.error(`Failed to close socket: ${socketError.message}`, 'BALANCER');
+    }
+  }
+});
 
 app.use((err, req, res, next) => {
   logger.error(`Unhandled error: ${err.message}`, 'BALANCER');
@@ -188,9 +412,10 @@ app.use((err, req, res, next) => {
   });
 });
 
-const server = app.listen(PORT, () => {
+server.listen(PORT, () => {
   logger.success(`Load Balancer running on port ${PORT}`, 'BALANCER');
   logger.info(`Managing ${servers.length} backend servers`, 'BALANCER');
+  logger.info('WebSocket support enabled', 'BALANCER');
   logger.info('Starting health checks...', 'BALANCER');
 });
 

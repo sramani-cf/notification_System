@@ -32,14 +32,15 @@ class LoginController {
       
       logger.success(`Created login record: ${login._id}`, req.serverInfo);
 
-      // Send login alert email notification (fanout architecture)
+      // Send login alert notifications (both email and in-app) using fanout architecture
       try {
-        logger.info(`Attempting to send login alert email for user: ${login.username}`, req.serverInfo);
+        logger.info(`Attempting to send login alert notifications for user: ${login.username}`, req.serverInfo);
         
-        // Mark email as pending before queueing
+        // Mark both email and in-app notifications as pending before queueing
         await login.updateLoginAlertEmailStatus('pending');
+        await login.updateLoginInAppNotificationStatus('pending');
         
-        const emailResult = await notificationService.sendNotification(
+        const notificationResult = await notificationService.sendNotification(
           NOTIFICATION_TYPES.LOGIN,
           {
             email: loginData.email,
@@ -56,32 +57,61 @@ class LoginController {
           }
         );
         
-        // Update login record with queue information
-        if (emailResult && emailResult.success) {
-          await login.markLoginAlertEmailQueued(emailResult.jobId, emailResult.notificationId);
-          logger.success(`Login alert email queued successfully for user: ${login.username} (Job ID: ${emailResult.jobId}, Notification ID: ${emailResult.notificationId})`, req.serverInfo);
+        // Handle email notification result
+        if (notificationResult.email && notificationResult.email.success) {
+          await login.markLoginAlertEmailQueued(
+            notificationResult.email.jobId, 
+            notificationResult.email.notificationId
+          );
+          logger.success(`Login alert email queued successfully for user: ${login.username} (Job ID: ${notificationResult.email.jobId})`, req.serverInfo);
         } else {
-          const reason = emailResult?.reason || 'Unknown error during email queuing';
+          const reason = notificationResult.email?.reason || 'Unknown error during email queuing';
           await login.markLoginAlertEmailFailed(reason);
           logger.error(`Login alert email queuing failed for user: ${login.username}. Reason: ${reason}`, req.serverInfo);
         }
-      } catch (emailError) {
-        // Mark email as failed if queueing fails
-        const errorMessage = `Failed to queue: ${emailError.message}`;
+
+        // Handle in-app notification result
+        if (notificationResult.inapp && notificationResult.inapp.success) {
+          await login.markLoginInAppNotificationQueued(
+            notificationResult.inapp.jobId,
+            notificationResult.inapp.notificationId
+          );
+          logger.success(`Login in-app notification queued successfully for user: ${login.username} (Job ID: ${notificationResult.inapp.jobId})`, req.serverInfo);
+        } else {
+          const reason = notificationResult.inapp?.reason || 'Unknown error during in-app notification queuing';
+          await login.markLoginInAppNotificationFailed(reason);
+          logger.error(`Login in-app notification queuing failed for user: ${login.username}. Reason: ${reason}`, req.serverInfo);
+        }
+
+        // Log overall success
+        const emailSuccess = notificationResult.email?.success || false;
+        const inappSuccess = notificationResult.inapp?.success || false;
+        
+        if (emailSuccess || inappSuccess) {
+          logger.success(`Login notifications processed for ${login.username} - Email: ${emailSuccess ? 'Success' : 'Failed'}, In-App: ${inappSuccess ? 'Success' : 'Failed'}`, req.serverInfo);
+        } else {
+          logger.error(`All login notifications failed for ${login.username}`, req.serverInfo);
+        }
+
+      } catch (notificationError) {
+        // Mark both notifications as failed if queueing fails
+        const errorMessage = `Failed to queue: ${notificationError.message}`;
         await login.markLoginAlertEmailFailed(errorMessage);
-        logger.error(`Exception while queueing login alert email for ${login.username}: ${emailError.message}`, req.serverInfo);
+        await login.markLoginInAppNotificationFailed(errorMessage);
+        
+        logger.error(`Exception while queueing login notifications for ${login.username}: ${notificationError.message}`, req.serverInfo);
         
         // Log the full error stack for debugging
-        if (emailError.stack) {
-          logger.error(`Error stack: ${emailError.stack}`, req.serverInfo);
+        if (notificationError.stack) {
+          logger.error(`Error stack: ${notificationError.stack}`, req.serverInfo);
         }
         
         // Check for specific error types
-        if (emailError.message.includes('not ready')) {
-          logger.error('Email service not ready - check Redis connection and SMTP configuration', req.serverInfo);
-        } else if (emailError.message.includes('not available')) {
-          logger.error('Email service not available - check SMTP credentials and connection', req.serverInfo);
-        } else if (emailError.message.includes('Queue manager not initialized')) {
+        if (notificationError.message.includes('not ready')) {
+          logger.error('Notification service not ready - check Redis connection and configurations', req.serverInfo);
+        } else if (notificationError.message.includes('not available')) {
+          logger.error('Notification service not available - check service dependencies', req.serverInfo);
+        } else if (notificationError.message.includes('Queue manager not initialized')) {
           logger.error('Queue manager not initialized - check Redis connection', req.serverInfo);
         }
       }

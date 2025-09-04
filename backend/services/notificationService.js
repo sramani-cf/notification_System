@@ -1,5 +1,6 @@
 const queueManager = require('../queues');
 const EmailNotification = require('../models/emailNotification.model');
+const InAppNotification = require('../models/inAppNotification.model');
 const { NOTIFICATION_TYPES } = require('../constants');
 const logger = require('../utils/logger');
 
@@ -59,7 +60,7 @@ class NotificationService {
 
   /**
    * Main fanout method - distributes notifications to appropriate channels
-   * Currently only handles email notifications for signup, login, and password reset
+   * Handles both email and in-app notifications for signup, login, and password reset
    */
   async sendNotification(type, data, options = {}) {
     // Check if service is ready
@@ -72,21 +73,69 @@ class NotificationService {
       throw new Error(`Invalid notification type: ${type}`);
     }
 
-    // Only process email notifications for allowed types
+    const results = {
+      email: null,
+      inapp: null
+    };
+
+    // Send email notification if enabled for this type
     if (this.shouldSendEmail(type)) {
-      // Check if email service is available
-      if (!this.isEmailReady()) {
-        logger.error('Email service not available - check SMTP configuration', 'NOTIFICATION-SERVICE');
-        throw new Error('Email service not available - check SMTP configuration and credentials');
+      try {
+        if (!this.isEmailReady()) {
+          logger.error('Email service not available - check SMTP configuration', 'NOTIFICATION-SERVICE');
+          results.email = {
+            success: false,
+            reason: 'Email service not available - check SMTP configuration and credentials'
+          };
+        } else {
+          results.email = await this.sendEmailNotification(type, data, options);
+        }
+      } catch (error) {
+        logger.error(`Email notification failed: ${error.message}`, 'NOTIFICATION-SERVICE');
+        results.email = {
+          success: false,
+          reason: error.message
+        };
       }
-      return await this.sendEmailNotification(type, data, options);
     } else {
-      logger.warn(`Email notifications not configured for type: ${type}`, 'NOTIFICATION-SERVICE');
-      return {
+      logger.info(`Email notifications not configured for type: ${type}`, 'NOTIFICATION-SERVICE');
+      results.email = {
         success: false,
         reason: 'Email notifications not enabled for this type'
       };
     }
+
+    // Send in-app notification if enabled for this type
+    if (this.shouldSendInApp(type)) {
+      try {
+        results.inapp = await this.sendInAppNotification(type, data, options);
+      } catch (error) {
+        logger.error(`In-app notification failed: ${error.message}`, 'NOTIFICATION-SERVICE');
+        results.inapp = {
+          success: false,
+          reason: error.message
+        };
+      }
+    } else {
+      logger.info(`In-app notifications not configured for type: ${type}`, 'NOTIFICATION-SERVICE');
+      results.inapp = {
+        success: false,
+        reason: 'In-app notifications not enabled for this type'
+      };
+    }
+
+    // Return combined results
+    const emailSuccess = results.email?.success || false;
+    const inappSuccess = results.inapp?.success || false;
+
+    return {
+      success: emailSuccess || inappSuccess, // At least one succeeded
+      email: results.email,
+      inapp: results.inapp,
+      type: type,
+      recipient: data.email || data.userId,
+      timestamp: new Date().toISOString()
+    };
   }
 
   isValidNotificationType(type) {
@@ -106,6 +155,18 @@ class NotificationService {
       NOTIFICATION_TYPES.RESET_PASSWORD
     ];
     return emailEnabledTypes.includes(type);
+  }
+
+  shouldSendInApp(type) {
+    // Send in-app notifications for these types
+    const inAppEnabledTypes = [
+      NOTIFICATION_TYPES.SIGNUP,
+      NOTIFICATION_TYPES.LOGIN,
+      NOTIFICATION_TYPES.RESET_PASSWORD,
+      NOTIFICATION_TYPES.PURCHASE,
+      NOTIFICATION_TYPES.FRIEND_REQUEST
+    ];
+    return inAppEnabledTypes.includes(type);
   }
 
   async sendEmailNotification(type, data, options = {}) {
@@ -166,6 +227,166 @@ class NotificationService {
       logger.error(`Failed to send email notification: ${error.message}`, 'NOTIFICATION-SERVICE');
       throw error;
     }
+  }
+
+  async sendInAppNotification(type, data, options = {}) {
+    try {
+      logger.info(`Initiating in-app notification for ${type}`, 'NOTIFICATION-SERVICE');
+
+      // Validate required data
+      this.validateInAppData(type, data);
+
+      // Generate notification content
+      const notificationContent = this.generateInAppNotificationContent(type, data);
+
+      // Create in-app notification record upfront for tracking
+      const notification = new InAppNotification({
+        type: type,
+        recipient: {
+          userId: data.userId,
+          username: data.username,
+          email: data.email
+        },
+        title: notificationContent.title,
+        message: notificationContent.message,
+        data: new Map(Object.entries(data || {})),
+        priority: this.getNotificationPriority(type) >= 5 ? 'high' : 'normal',
+        status: 'pending',
+        queueName: 'inapp',
+        metadata: {
+          serverInfo: options.serverInfo,
+          processedBy: `${options.serverInfo || 'NOTIFICATION-SERVICE'}-${Date.now()}`,
+          originalData: new Map(Object.entries(data || {}))
+        }
+      });
+      await notification.save();
+
+      // Prepare in-app job data with the notification ID
+      const jobData = this.prepareInAppJobData(type, data, options, notificationContent);
+      jobData.notificationId = notification._id.toString();
+
+      // Add to primary in-app queue (fanout continues here)
+      const job = await queueManager.addInAppJob('inapp', jobData, {
+        priority: this.getNotificationPriority(type),
+        delay: options.delay || 0
+      });
+
+      // Update notification with job ID
+      notification.jobId = job.id;
+      notification.status = 'queued';
+      await notification.save();
+
+      logger.success(`In-app notification queued successfully: ${job.id}`, 'NOTIFICATION-SERVICE');
+
+      return {
+        success: true,
+        jobId: job.id,
+        notificationId: notification._id.toString(),
+        type: type,
+        recipient: data.userId,
+        queueName: 'inapp'
+      };
+    } catch (error) {
+      logger.error(`Failed to send in-app notification: ${error.message}`, 'NOTIFICATION-SERVICE');
+      throw error;
+    }
+  }
+
+  validateInAppData(type, data) {
+    // Common validation
+    if (!data.userId) {
+      throw new Error('User ID is required for in-app notifications');
+    }
+
+    // Type-specific validation
+    switch (type) {
+      case NOTIFICATION_TYPES.SIGNUP:
+        if (!data.username) {
+          throw new Error('Username is required for signup notifications');
+        }
+        break;
+      case NOTIFICATION_TYPES.LOGIN:
+        if (!data.username) {
+          throw new Error('Username is required for login notifications');
+        }
+        break;
+      case NOTIFICATION_TYPES.RESET_PASSWORD:
+        if (!data.username && !data.email) {
+          throw new Error('Username or email is required for password reset notifications');
+        }
+        break;
+      case NOTIFICATION_TYPES.PURCHASE:
+        if (!data.totalAmount) {
+          throw new Error('Total amount is required for purchase notifications');
+        }
+        break;
+      case NOTIFICATION_TYPES.FRIEND_REQUEST:
+        if (!data.fromUsername) {
+          throw new Error('From username is required for friend request notifications');
+        }
+        break;
+    }
+  }
+
+  prepareInAppJobData(type, data, options, content) {
+    const jobData = {
+      type: type,
+      recipient: {
+        userId: data.userId,
+        username: data.username || null,
+        email: data.email || null
+      },
+      title: content.title,
+      message: content.message,
+      data: data,
+      priority: this.getNotificationPriority(type) >= 5 ? 'high' : 'normal',
+      originalData: { 
+        ...data,
+        // Add IDs for different notification types to enable callback tracking
+        resetPasswordId: data.resetPasswordId || options.resetPasswordId || null,
+        loginId: data.loginId || options.loginId || null,
+        signupId: data.signupId || options.signupId || null,
+        purchaseId: data.purchaseId || options.purchaseId || null,
+        friendRequestId: data.friendRequestId || options.friendRequestId || null
+      },
+      serverInfo: options.serverInfo || 'NOTIFICATION-SERVICE',
+      processedBy: `${options.serverInfo || 'NOTIFICATION-SERVICE'}-${Date.now()}`,
+      createdAt: new Date().toISOString()
+    };
+
+    return jobData;
+  }
+
+  generateInAppNotificationContent(type, data) {
+    const templates = {
+      [NOTIFICATION_TYPES.LOGIN]: {
+        title: 'New Login Alert',
+        message: `New login detected from ${data.ipAddress || 'unknown location'} at ${new Date(data.loginTime || Date.now()).toLocaleString()}`
+      },
+      [NOTIFICATION_TYPES.SIGNUP]: {
+        title: 'Welcome to Notification System!',
+        message: `Welcome ${data.username}! Your account has been successfully created.`
+      },
+      [NOTIFICATION_TYPES.RESET_PASSWORD]: {
+        title: 'Password Reset Request',
+        message: data.resetToken 
+          ? `A password reset was requested for your account. Use the code: ${data.resetToken}`
+          : 'A password reset link has been sent to your email.'
+      },
+      [NOTIFICATION_TYPES.PURCHASE]: {
+        title: 'Purchase Confirmation',
+        message: `Your purchase of ${data.totalAmount} ${data.currency} has been processed successfully.`
+      },
+      [NOTIFICATION_TYPES.FRIEND_REQUEST]: {
+        title: 'New Friend Request',
+        message: `${data.fromUsername} sent you a friend request: "${data.message}"`
+      }
+    };
+
+    return templates[type] || {
+      title: 'Notification',
+      message: 'You have a new notification'
+    };
   }
 
   validateEmailData(type, data) {

@@ -4,7 +4,7 @@ import { useState, useCallback } from 'react';
 import notificationService from '@/services/notificationService';
 import { MAX_NOTIFICATION_HISTORY } from '@/constants';
 
-export const useNotifications = () => {
+export const useNotifications = (user = null) => {
   const [loading, setLoading] = useState(false);
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkProgress, setBulkProgress] = useState({ current: 0, total: 0, type: null });
@@ -27,7 +27,7 @@ export const useNotifications = () => {
     setResponse(null);
 
     try {
-      const result = await notificationService.sendNotification(type);
+      const result = await notificationService.sendNotification(type, user);
       setResponse(result);
       
       // Update click counter
@@ -58,7 +58,7 @@ export const useNotifications = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user]);
 
   const sendBulkNotification = useCallback(async (type, count = bulkCount) => {
     setBulkLoading(true);
@@ -75,7 +75,7 @@ export const useNotifications = () => {
         setBulkProgress(prev => ({ ...prev, current: i + 1 }));
         
         try {
-          await notificationService.sendNotification(type);
+          await notificationService.sendNotification(type, user);
           successCount++;
           
           // Update click counter
@@ -123,7 +123,7 @@ export const useNotifications = () => {
       setBulkProgress({ current: 0, total: 0, type: null });
       setStopBulkOperation(false);
     }
-  }, [bulkCount, stopBulkOperation]);
+  }, [bulkCount, stopBulkOperation, user]);
 
   const stopBulk = useCallback(() => {
     setStopBulkOperation(true);

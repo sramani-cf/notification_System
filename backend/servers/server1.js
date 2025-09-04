@@ -5,7 +5,10 @@ const { connectDB } = require('../config/db');
 const apiRoutes = require('../routes');
 const notificationService = require('../services/notificationService');
 const mailWorker = require('../workers/mailWorker');
+const inAppWorker = require('../workers/inAppWorker');
+const websocketService = require('../services/websocketService');
 const logger = require('../utils/logger');
+const http = require('http');
 
 const app = express();
 const PORT = process.env.SERVER1_PORT || 5001;
@@ -88,15 +91,34 @@ const startServer = async () => {
     await mailWorker.initialize();
     logger.success('Mail workers initialized', SERVER_NAME);
     
+    // Initialize in-app workers
+    await inAppWorker.initialize();
+    logger.success('In-app notification workers initialized', SERVER_NAME);
+    
     // Verify email system is working
     if (!notificationService.isEmailReady()) {
-      logger.warn('Email service is not ready - login notifications may not work properly', SERVER_NAME);
+      logger.warn('Email service is not ready - email notifications may not work properly', SERVER_NAME);
       logger.warn('Check SMTP configuration and credentials in .env file', SERVER_NAME);
     } else {
       logger.success('Email system is ready and operational', SERVER_NAME);
     }
     
-    const server = app.listen(PORT, () => {
+    // Create HTTP server and initialize WebSocket
+    const server = http.createServer(app);
+    
+    // Initialize WebSocket service with CORS options
+    const corsOptions = {
+      origin: [
+        process.env.FRONTEND_URL || "http://localhost:3000",
+        "http://localhost:8000" // Load balancer URL
+      ],
+      credentials: true
+    };
+    
+    websocketService.initialize(server, corsOptions);
+    logger.success('WebSocket service initialized', SERVER_NAME);
+    
+    server.listen(PORT, () => {
       logger.success(`${SERVER_NAME} running on port ${PORT}`, SERVER_NAME);
       logger.info(`Process ID: ${process.pid}`, SERVER_NAME);
       logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`, SERVER_NAME);

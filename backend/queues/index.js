@@ -50,17 +50,8 @@ class QueueManager {
   }
 
   async initializeQueues() {
-    const connection = {
-      host: config.redis.host,
-      port: config.redis.port,
-      password: config.redis.password,
-      db: config.redis.db
-    };
-
-    // Add username if provided
-    if (config.redis.username) {
-      connection.username = config.redis.username;
-    }
+    // Reuse the existing Redis connection instead of creating new ones
+    const connection = this.redis;
 
     // Primary mail queue - handles initial email processing
     this.queues.mail = new Queue(config.queues.mail.name, {
@@ -122,7 +113,40 @@ class QueueManager {
       }
     });
 
-    logger.info('All queues initialized successfully', 'QUEUE-MANAGER');
+    // In-app notification queue - handles real-time notifications via WebSocket
+    this.queues.inapp = new Queue(config.queues.inapp.name, {
+      connection,
+      defaultJobOptions: {
+        removeOnComplete: 100,
+        removeOnFail: 50,
+        attempts: config.queues.inapp.attempts,
+        backoff: {
+          type: 'exponential',
+          settings: {
+            delay: 500 // Base delay for exponential backoff (faster for real-time)
+          }
+        }
+      }
+    });
+
+    // In-app retry queue - for failed in-app notifications
+    this.queues.inappRetry = new Queue(config.queues.inappRetry.name, {
+      connection,
+      defaultJobOptions: {
+        removeOnComplete: 100,
+        removeOnFail: 50,
+        delay: config.queues.inappRetry.delay,
+        attempts: config.queues.inappRetry.attempts,
+        backoff: {
+          type: 'exponential',
+          settings: {
+            delay: 1000
+          }
+        }
+      }
+    });
+
+    logger.info('All queues (including in-app notification queues) initialized successfully', 'QUEUE-MANAGER');
   }
 
   async addEmailJob(queueName, jobData, options = {}) {
@@ -150,13 +174,40 @@ class QueueManager {
     }
   }
 
-  getJobPriority(emailType) {
+  async addInAppJob(queueName, jobData, options = {}) {
+    if (!this.isInitialized) {
+      throw new Error('Queue manager not initialized');
+    }
+
+    const queue = this.queues[queueName];
+    if (!queue) {
+      throw new Error(`Queue '${queueName}' not found`);
+    }
+
+    try {
+      const job = await queue.add(`${jobData.type}-inapp`, jobData, {
+        ...options,
+        priority: this.getJobPriority(jobData.type),
+        jobId: jobData.notificationId ? `inapp-${jobData.notificationId}` : undefined
+      });
+
+      logger.info(`Added in-app notification job to ${queueName} queue: ${job.id}`, 'QUEUE-MANAGER');
+      return job;
+    } catch (error) {
+      logger.error(`Failed to add in-app job to ${queueName} queue: ${error.message}`, 'QUEUE-MANAGER');
+      throw error;
+    }
+  }
+
+  getJobPriority(notificationType) {
     const priorities = {
       reset_password: 10,    // Highest priority
       signup: 5,             // Medium priority  
-      login: 1               // Lower priority
+      login: 3,              // Higher priority for real-time login alerts
+      purchase: 4,           // Medium-high priority
+      friend_request: 2      // Lower priority
     };
-    return priorities[emailType] || 1;
+    return priorities[notificationType] || 1;
   }
 
   async getQueueStats() {

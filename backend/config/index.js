@@ -40,14 +40,17 @@ const config = {
     maxRetriesPerRequest: null, // Required by BullMQ
     retryDelayOnFailover: 200,
     maxmemoryPolicy: 'allkeys-lru',
-    connectTimeout: 15000,
+    connectTimeout: 10000,
     lazyConnect: true,
     // Optimized connection settings to reduce Redis load
     family: 4,
     keepAlive: true,
     enableReadyCheck: false,
     // Connection pooling
-    enableAutoPipelining: true
+    enableAutoPipelining: true,
+    // Additional connection limits
+    maxLoadingTimeout: 2000,
+    commandTimeout: 5000
   },
 
   queues: {
@@ -68,6 +71,17 @@ const config = {
     dlq: {
       name: 'dead-letter-queue',
       concurrency: parseInt(process.env.DLQ_CONCURRENCY) || 1
+    },
+    inapp: {
+      name: 'inapp-notification-queue',
+      concurrency: parseInt(process.env.INAPP_QUEUE_CONCURRENCY) || 10,
+      attempts: parseInt(process.env.INAPP_MAX_ATTEMPTS) || 3
+    },
+    inappRetry: {
+      name: 'inapp-retry-queue',
+      delay: parseInt(process.env.INAPP_RETRY_DELAY) || 60000, // 1 minute
+      concurrency: parseInt(process.env.INAPP_RETRY_CONCURRENCY) || 5,
+      attempts: parseInt(process.env.INAPP_RETRY_MAX_ATTEMPTS) || 2
     }
   },
 

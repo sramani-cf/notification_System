@@ -144,6 +144,63 @@ const loginSchema = new mongoose.Schema({
       queueName: String
     }]
   },
+  // In-app notification delivery tracking fields (mirrors email tracking structure)
+  loginInAppNotification: {
+    status: {
+      type: String,
+      enum: ['pending', 'queued', 'delivered', 'failed', 'not_sent'],
+      default: 'not_sent',
+      index: true
+    },
+    attempts: {
+      type: Number,
+      default: 0
+    },
+    lastAttemptAt: {
+      type: Date,
+      default: null
+    },
+    deliveredAt: {
+      type: Date,
+      default: null
+    },
+    failedAt: {
+      type: Date,
+      default: null
+    },
+    failureReason: {
+      type: String,
+      default: null
+    },
+    notificationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'InAppNotification',
+      default: null,
+      index: true
+    },
+    queueJobId: {
+      type: String,
+      default: null
+    },
+    socketId: {
+      type: String,
+      default: null
+    },
+    deliveredVia: {
+      type: String,
+      enum: ['websocket', 'polling', 'fallback'],
+      default: null
+    },
+    deliveryHistory: [{
+      attempt: Number,
+      timestamp: Date,
+      status: String,
+      error: String,
+      queueName: String,
+      socketId: String,
+      deliveryMethod: String
+    }]
+  },
   metadata: {
     type: Map,
     of: mongoose.Schema.Types.Mixed
@@ -265,6 +322,75 @@ loginSchema.methods.getLoginAlertEmailSummary = function() {
     messageId: this.loginAlertEmail?.messageId,
     failureReason: this.loginAlertEmail?.failureReason,
     totalHistoryEntries: this.loginAlertEmail?.deliveryHistory?.length || 0
+  };
+};
+
+// Instance methods for login in-app notification delivery tracking
+loginSchema.methods.updateLoginInAppNotificationStatus = function(status, details = {}) {
+  this.loginInAppNotification = this.loginInAppNotification || {};
+  this.loginInAppNotification.status = status;
+  
+  // Add to delivery history
+  this.loginInAppNotification.deliveryHistory = this.loginInAppNotification.deliveryHistory || [];
+  this.loginInAppNotification.deliveryHistory.push({
+    attempt: this.loginInAppNotification.attempts + 1,
+    timestamp: new Date(),
+    status: status,
+    error: details.error || null,
+    queueName: details.queueName || 'inapp',
+    socketId: details.socketId || null,
+    deliveryMethod: details.deliveryMethod || 'websocket'
+  });
+  
+  // Update specific fields based on status
+  switch (status) {
+    case 'queued':
+      this.loginInAppNotification.queueJobId = details.jobId;
+      this.loginInAppNotification.notificationId = details.notificationId;
+      break;
+    case 'delivered':
+      this.loginInAppNotification.deliveredAt = new Date();
+      this.loginInAppNotification.socketId = details.socketId;
+      this.loginInAppNotification.deliveredVia = details.deliveryMethod || 'websocket';
+      break;
+    case 'failed':
+      this.loginInAppNotification.failedAt = new Date();
+      this.loginInAppNotification.failureReason = details.error || 'Unknown error';
+      this.loginInAppNotification.attempts += 1;
+      this.loginInAppNotification.lastAttemptAt = new Date();
+      break;
+    case 'pending':
+      this.loginInAppNotification.attempts += 1;
+      this.loginInAppNotification.lastAttemptAt = new Date();
+      break;
+  }
+  
+  return this.save();
+};
+
+loginSchema.methods.markLoginInAppNotificationQueued = function(jobId, notificationId) {
+  return this.updateLoginInAppNotificationStatus('queued', { jobId, notificationId });
+};
+
+loginSchema.methods.markLoginInAppNotificationDelivered = function(socketId, deliveryMethod = 'websocket') {
+  return this.updateLoginInAppNotificationStatus('delivered', { socketId, deliveryMethod });
+};
+
+loginSchema.methods.markLoginInAppNotificationFailed = function(error, queueName = 'inapp', socketId = null) {
+  return this.updateLoginInAppNotificationStatus('failed', { error, queueName, socketId });
+};
+
+loginSchema.methods.getLoginInAppNotificationSummary = function() {
+  return {
+    status: this.loginInAppNotification?.status || 'not_sent',
+    attempts: this.loginInAppNotification?.attempts || 0,
+    lastAttemptAt: this.loginInAppNotification?.lastAttemptAt,
+    deliveredAt: this.loginInAppNotification?.deliveredAt,
+    failedAt: this.loginInAppNotification?.failedAt,
+    socketId: this.loginInAppNotification?.socketId,
+    deliveredVia: this.loginInAppNotification?.deliveredVia,
+    failureReason: this.loginInAppNotification?.failureReason,
+    totalHistoryEntries: this.loginInAppNotification?.deliveryHistory?.length || 0
   };
 };
 
