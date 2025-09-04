@@ -189,11 +189,12 @@ class WebSocketService {
         return;
       }
 
-      // Store user connection mapping
+      // Store user connection mapping (use string for consistent key lookup)
+      const userIdStr = String(userId);
       const connectionInfo = {
         socketId: socket.id,
         socket: socket,
-        userId: parseInt(userId),
+        userId: userIdStr,
         username: username,
         sessionToken: sessionToken,
         connectedAt: new Date(),
@@ -201,40 +202,40 @@ class WebSocketService {
       };
 
       // Check for existing connection for this user
-      if (this.connectedClients.has(userId)) {
-        const existingConnection = this.connectedClients.get(userId);
+      if (this.connectedClients.has(userIdStr)) {
+        const existingConnection = this.connectedClients.get(userIdStr);
         
         // Only disconnect if it's a different socket (not the same connection re-authenticating)
         if (existingConnection.socketId !== socket.id) {
-          logger.info(`Disconnecting previous connection for user ${userId} (socket: ${existingConnection.socketId})`, 'WEBSOCKET-SERVICE');
+          logger.info(`Disconnecting previous connection for user ${userIdStr} (socket: ${existingConnection.socketId})`, 'WEBSOCKET-SERVICE');
           if (existingConnection.socket && existingConnection.socket.connected) {
             existingConnection.socket.disconnect(true);
           }
           this.userSockets.delete(existingConnection.socketId);
         } else {
           // Same socket re-authenticating, just update the connection info
-          logger.info(`User ${userId} re-authenticating on same socket ${socket.id}`, 'WEBSOCKET-SERVICE');
+          logger.info(`User ${userIdStr} re-authenticating on same socket ${socket.id}`, 'WEBSOCKET-SERVICE');
         }
       }
 
       // Store new connection
-      this.connectedClients.set(userId, connectionInfo);
+      this.connectedClients.set(userIdStr, connectionInfo);
       this.userSockets.set(socket.id, connectionInfo);
 
       // Join user-specific room for targeted notifications
-      socket.join(`user:${userId}`);
+      socket.join(`user:${userIdStr}`);
 
       // Confirm authentication
       socket.emit('auth:success', {
-        userId: userId,
+        userId: userIdStr,
         username: username,
         connectedAt: connectionInfo.connectedAt
       });
 
-      logger.success(`User ${username} (${userId}) authenticated with socket ${socket.id}`, 'WEBSOCKET-SERVICE');
+      logger.success(`User ${username} (${userIdStr}) authenticated with socket ${socket.id}`, 'WEBSOCKET-SERVICE');
 
       // Send any pending notifications for this user
-      this.sendPendingNotifications(userId);
+      this.sendPendingNotifications(userIdStr);
 
     } catch (error) {
       logger.error(`Authentication error for socket ${socket.id}: ${error.message}`, 'WEBSOCKET-SERVICE');
@@ -326,7 +327,9 @@ class WebSocketService {
         throw new Error('WebSocket service not initialized');
       }
 
-      const connection = this.connectedClients.get(parseInt(userId));
+      // Convert userId to string for consistent key lookup
+      const userIdStr = String(userId);
+      const connection = this.connectedClients.get(userIdStr);
       
       if (!connection || !connection.socket.connected) {
         logger.warn(`User ${userId} not connected via WebSocket`, 'WEBSOCKET-SERVICE');
@@ -349,7 +352,7 @@ class WebSocketService {
       };
 
       // Send to user room (works across all servers with Redis adapter)
-      this.io.to(`user:${userId}`).emit('notification:new', notificationPayload);
+      this.io.to(`user:${userIdStr}`).emit('notification:new', notificationPayload);
       
       // Also send directly to socket if available
       if (connection.socket.connected) {
@@ -383,8 +386,10 @@ class WebSocketService {
     try {
       const InAppNotification = require('../models/inAppNotification.model');
       
+      // Convert userId to number for database query
+      const userIdNum = parseInt(userId);
       const pendingNotifications = await InAppNotification.find({
-        'recipient.userId': userId,
+        'recipient.userId': userIdNum,
         status: 'pending',
         expiresAt: { $gt: new Date() }
       }).sort({ createdAt: 1 }).limit(10); // Limit to 10 most recent

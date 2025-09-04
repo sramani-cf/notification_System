@@ -6,8 +6,21 @@ const NotificationToast = ({ notification, onDismiss, onMarkAsRead, autoHideDura
   const [isVisible, setIsVisible] = useState(true);
   const [timeRemaining, setTimeRemaining] = useState(autoHideDuration / 1000);
 
+  const handleDismiss = () => {
+    setIsVisible(false);
+    setTimeout(() => {
+      if (onDismiss) onDismiss(notification.instanceId || notification.id);
+    }, 300); // Wait for fade out animation
+  };
+
   useEffect(() => {
     if (!notification) return;
+
+    // Make notification visible when it changes
+    setIsVisible(true);
+    
+    // Reset timer when notification changes
+    setTimeRemaining(autoHideDuration / 1000);
 
     // Auto-hide timer
     let hideTimer;
@@ -32,13 +45,6 @@ const NotificationToast = ({ notification, onDismiss, onMarkAsRead, autoHideDura
       if (countdownTimer) clearInterval(countdownTimer);
     };
   }, [notification, autoHideDuration]);
-
-  const handleDismiss = () => {
-    setIsVisible(false);
-    setTimeout(() => {
-      if (onDismiss) onDismiss(notification.id);
-    }, 300); // Wait for fade out animation
-  };
 
   const handleMarkAsRead = () => {
     if (onMarkAsRead) {
@@ -92,9 +98,9 @@ const NotificationToast = ({ notification, onDismiss, onMarkAsRead, autoHideDura
   return (
     <div
       className={`
-        fixed top-4 right-4 max-w-md w-full bg-white border-l-4 rounded-lg shadow-lg z-50
+        relative max-w-sm w-full bg-white border-l-4 rounded-lg shadow-xl
         transform transition-all duration-300 ease-in-out
-        ${isVisible ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'}
+        ${isVisible ? 'translate-x-0 opacity-100 scale-100' : 'translate-x-full opacity-0 scale-95'}
         ${priorityStyles}
       `}
       role="alert"

@@ -49,27 +49,21 @@ export const useWebSocketNotifications = (user = null) => {
   const handleNewNotification = useCallback((notification) => {
     console.log('New notification received:', notification);
     
-    // Track if this is a new notification
-    let isNewNotification = false;
+    // Add a unique timestamp to make each notification instance unique
+    const uniqueNotification = {
+      ...notification,
+      instanceId: `${notification.id}-${Date.now()}`, // Unique instance ID
+      receivedAt: new Date().toISOString()
+    };
     
     setNotifications(prev => {
-      // Check if notification already exists to prevent duplicates
-      const exists = prev.some(n => n.id === notification.id);
-      if (exists) {
-        console.log('Notification already exists, skipping duplicate:', notification.id);
-        return prev;
-      }
-      
-      // Mark as new notification
-      isNewNotification = true;
-      
       // Add new notification at the beginning and limit to maxNotifications
-      const updated = [notification, ...prev].slice(0, maxNotifications);
+      const updated = [uniqueNotification, ...prev].slice(0, maxNotifications);
       return updated;
     });
     
-    // Increment unread count only for new notifications
-    if (isNewNotification && !notification.isRead) {
+    // Increment unread count for new notifications
+    if (!notification.isRead) {
       setUnreadCount(prev => prev + 1);
     }
     

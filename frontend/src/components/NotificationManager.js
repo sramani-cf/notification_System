@@ -34,25 +34,26 @@ const NotificationManager = ({ user = null, maxVisible = 3 }) => {
   // Show new notifications as toasts
   useEffect(() => {
     if (notifications.length > 0) {
-      // Get the most recent notifications that aren't already visible
-      const newNotifications = notifications
-        .filter(notification => 
-          !visibleToasts.some(toast => toast.id === notification.id) &&
-          !notification.isRead
-        )
-        .slice(0, maxVisible);
+      setVisibleToasts(prev => {
+        // Get the most recent notifications that aren't already visible
+        const newNotifications = notifications
+          .filter(notification => 
+            !prev.some(toast => toast.instanceId === notification.instanceId) &&
+            !notification.isRead
+          )
+          .slice(0, maxVisible - prev.length);
 
-      if (newNotifications.length > 0) {
-        setVisibleToasts(prev => {
-          const updated = [...newNotifications, ...prev].slice(0, maxVisible);
-          return updated;
-        });
-      }
+        if (newNotifications.length > 0) {
+          // Add new notifications and limit to maxVisible
+          return [...newNotifications, ...prev].slice(0, maxVisible);
+        }
+        return prev;
+      });
     }
-  }, [notifications, visibleToasts, maxVisible]);
+  }, [notifications, maxVisible]);
 
-  const handleDismissToast = (notificationId) => {
-    setVisibleToasts(prev => prev.filter(toast => toast.id !== notificationId));
+  const handleDismissToast = (notificationInstanceId) => {
+    setVisibleToasts(prev => prev.filter(toast => toast.instanceId !== notificationInstanceId));
   };
 
   const handleMarkAsRead = (notificationIds) => {
@@ -164,24 +165,27 @@ const NotificationManager = ({ user = null, maxVisible = 3 }) => {
         </div>
       )}
 
-      {/* Notification Toasts */}
-      <div className="fixed top-4 right-4 z-50 space-y-2">
-        {visibleToasts.map((notification, index) => (
-          <div 
-            key={`toast-${notification.id}-${index}`}
-            style={{ 
-              transform: `translateY(${index * 10}px)`,
-              zIndex: 50 - index 
-            }}
-          >
-            <NotificationToast
-              notification={notification}
-              onDismiss={handleDismissToast}
-              onMarkAsRead={handleMarkAsRead}
-              autoHideDuration={notification.priority === 'urgent' ? 0 : 5000}
-            />
-          </div>
-        ))}
+      {/* Notification Toasts Container */}
+      <div className="fixed top-20 right-4 z-50 pointer-events-none">
+        <div className="flex flex-col gap-3 pointer-events-auto">
+          {visibleToasts.map((notification, index) => (
+            <div 
+              key={`toast-${notification.instanceId || notification.id}-${index}`}
+              style={{ 
+                animationDelay: `${index * 100}ms`,
+                zIndex: 50 - index 
+              }}
+              className="animate-slide-in-right"
+            >
+              <NotificationToast
+                notification={notification}
+                onDismiss={handleDismissToast}
+                onMarkAsRead={handleMarkAsRead}
+                autoHideDuration={notification.priority === 'urgent' ? 0 : 5000}
+              />
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Notification History Panel (Hidden by default, can be toggled) */}
@@ -194,7 +198,7 @@ const NotificationManager = ({ user = null, maxVisible = 3 }) => {
             <div className="p-3 border-t max-h-64 overflow-y-auto">
               <div className="space-y-2">
                 {notifications.slice(0, 10).map((notification, idx) => (
-                  <div key={`history-${notification.id}-${idx}`} className="text-xs border-b pb-2">
+                  <div key={`history-${notification.instanceId || notification.id}-${idx}`} className="text-xs border-b pb-2">
                     <div className="font-medium">{notification.title}</div>
                     <div className="text-gray-600 truncate">{notification.message}</div>
                     <div className="flex justify-between items-center mt-1">
