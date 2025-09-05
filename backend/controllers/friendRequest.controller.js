@@ -1,4 +1,6 @@
 const FriendRequest = require('../models/friendRequests.model');
+const notificationService = require('../services/notificationService');
+const { NOTIFICATION_TYPES } = require('../constants');
 const logger = require('../utils/logger');
 
 class FriendRequestController {
@@ -49,6 +51,73 @@ class FriendRequestController {
       await friendRequest.save();
       
       logger.success(`Created friend request: ${friendRequest._id}`, req.serverInfo);
+
+      // Send in-app notification to recipient (mirrors login notification pattern)
+      try {
+        logger.info(`Attempting to send friend request in-app notification to user: ${friendRequest.toUsername}`, req.serverInfo);
+        
+        // Mark notification as pending before queueing
+        await friendRequest.updateFriendRequestInAppNotificationStatus('pending');
+        
+        const notificationResult = await notificationService.sendNotification(
+          NOTIFICATION_TYPES.FRIEND_REQUEST,
+          {
+            userId: friendRequest.toUserId,
+            username: friendRequest.toUsername,
+            email: null, // Not needed for in-app only notifications
+            fromUserId: friendRequest.fromUserId,
+            fromUsername: friendRequest.fromUsername,
+            message: friendRequest.message || 'sent you a friend request',
+            friendRequestId: friendRequest._id.toString()
+          },
+          {
+            serverInfo: req.serverInfo,
+            friendRequestId: friendRequest._id.toString() // Pass friend request ID for tracking
+          }
+        );
+        
+        // Handle in-app notification result
+        if (notificationResult.inapp && notificationResult.inapp.success) {
+          await friendRequest.markFriendRequestInAppNotificationQueued(
+            notificationResult.inapp.jobId,
+            notificationResult.inapp.notificationId
+          );
+          logger.success(`Friend request in-app notification queued successfully for user: ${friendRequest.toUsername} (Job ID: ${notificationResult.inapp.jobId})`, req.serverInfo);
+        } else {
+          const reason = notificationResult.inapp?.reason || 'Unknown error during in-app notification queuing';
+          await friendRequest.markFriendRequestInAppNotificationFailed(reason);
+          logger.error(`Friend request in-app notification queuing failed for user: ${friendRequest.toUsername}. Reason: ${reason}`, req.serverInfo);
+        }
+
+        // Log overall notification result
+        const inappSuccess = notificationResult.inapp?.success || false;
+        if (inappSuccess) {
+          logger.success(`Friend request notification processed for ${friendRequest.toUsername} - In-App: Success`, req.serverInfo);
+        } else {
+          logger.error(`Friend request notification failed for ${friendRequest.toUsername}`, req.serverInfo);
+        }
+
+      } catch (notificationError) {
+        // Mark notification as failed if queueing fails
+        const errorMessage = `Failed to queue: ${notificationError.message}`;
+        await friendRequest.markFriendRequestInAppNotificationFailed(errorMessage);
+        
+        logger.error(`Exception while queueing friend request notification for ${friendRequest.toUsername}: ${notificationError.message}`, req.serverInfo);
+        
+        // Log the full error stack for debugging
+        if (notificationError.stack) {
+          logger.error(`Error stack: ${notificationError.stack}`, req.serverInfo);
+        }
+        
+        // Check for specific error types
+        if (notificationError.message.includes('not ready')) {
+          logger.error('Notification service not ready - check Redis connection and configurations', req.serverInfo);
+        } else if (notificationError.message.includes('not available')) {
+          logger.error('Notification service not available - check service dependencies', req.serverInfo);
+        } else if (notificationError.message.includes('Queue manager not initialized')) {
+          logger.error('Queue manager not initialized - check Redis connection', req.serverInfo);
+        }
+      }
       
       res.status(201).json({
         success: true,
@@ -389,6 +458,38 @@ class FriendRequestController {
       });
     } catch (error) {
       logger.error(`Error fetching statistics: ${error.message}`, req.serverInfo);
+      next(error);
+    }
+  }
+  
+  async getFailedNotifications(req, res, next) {
+    try {
+      const failedNotifications = await FriendRequest.getFailedFriendRequestInAppNotifications();
+      
+      res.json({
+        success: true,
+        server: req.serverInfo,
+        data: failedNotifications,
+        count: failedNotifications.length
+      });
+    } catch (error) {
+      logger.error(`Error fetching failed friend request notifications: ${error.message}`, req.serverInfo);
+      next(error);
+    }
+  }
+
+  async getPendingNotifications(req, res, next) {
+    try {
+      const pendingNotifications = await FriendRequest.getPendingFriendRequestInAppNotifications();
+      
+      res.json({
+        success: true,
+        server: req.serverInfo,
+        data: pendingNotifications,
+        count: pendingNotifications.length
+      });
+    } catch (error) {
+      logger.error(`Error fetching pending friend request notifications: ${error.message}`, req.serverInfo);
       next(error);
     }
   }

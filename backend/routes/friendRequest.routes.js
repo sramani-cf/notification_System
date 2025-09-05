@@ -27,6 +27,13 @@ router.route('/statistics')
 router.route('/cleanup')
   .post(asyncHandler(friendRequestController.cleanupExpired));
 
+// Notification tracking routes
+router.route('/notifications/failed')
+  .get(asyncHandler(friendRequestController.getFailedNotifications));
+
+router.route('/notifications/pending')
+  .get(asyncHandler(friendRequestController.getPendingNotifications));
+
 // Check existing request
 router.route('/check')
   .get(asyncHandler(friendRequestController.checkExisting));

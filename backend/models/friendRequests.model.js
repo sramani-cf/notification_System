@@ -87,6 +87,63 @@ const friendRequestSchema = new mongoose.Schema({
     type: String,
     required: false
   },
+  // In-app notification delivery tracking fields (mirrors login schema structure)
+  friendRequestInAppNotification: {
+    status: {
+      type: String,
+      enum: ['pending', 'queued', 'delivered', 'failed', 'not_sent'],
+      default: 'not_sent',
+      index: true
+    },
+    attempts: {
+      type: Number,
+      default: 0
+    },
+    lastAttemptAt: {
+      type: Date,
+      default: null
+    },
+    deliveredAt: {
+      type: Date,
+      default: null
+    },
+    failedAt: {
+      type: Date,
+      default: null
+    },
+    failureReason: {
+      type: String,
+      default: null
+    },
+    notificationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'InAppNotification',
+      default: null,
+      index: true
+    },
+    queueJobId: {
+      type: String,
+      default: null
+    },
+    socketId: {
+      type: String,
+      default: null
+    },
+    deliveredVia: {
+      type: String,
+      enum: ['websocket', 'polling', 'fallback'],
+      default: null
+    },
+    deliveryHistory: [{
+      attempt: Number,
+      timestamp: Date,
+      status: String,
+      error: String,
+      queueName: String,
+      socketId: String,
+      deliveryMethod: String
+    }]
+  },
   metadata: {
     type: Map,
     of: mongoose.Schema.Types.Mixed
@@ -158,6 +215,75 @@ friendRequestSchema.methods.block = function() {
   return this.save();
 };
 
+
+// Instance methods for friend request in-app notification delivery tracking (mirrors login methods)
+friendRequestSchema.methods.updateFriendRequestInAppNotificationStatus = function(status, details = {}) {
+  this.friendRequestInAppNotification = this.friendRequestInAppNotification || {};
+  this.friendRequestInAppNotification.status = status;
+  
+  // Add to delivery history
+  this.friendRequestInAppNotification.deliveryHistory = this.friendRequestInAppNotification.deliveryHistory || [];
+  this.friendRequestInAppNotification.deliveryHistory.push({
+    attempt: this.friendRequestInAppNotification.attempts + 1,
+    timestamp: new Date(),
+    status: status,
+    error: details.error || null,
+    queueName: details.queueName || 'inapp',
+    socketId: details.socketId || null,
+    deliveryMethod: details.deliveryMethod || 'websocket'
+  });
+  
+  // Update specific fields based on status
+  switch (status) {
+    case 'queued':
+      this.friendRequestInAppNotification.queueJobId = details.jobId;
+      this.friendRequestInAppNotification.notificationId = details.notificationId;
+      break;
+    case 'delivered':
+      this.friendRequestInAppNotification.deliveredAt = new Date();
+      this.friendRequestInAppNotification.socketId = details.socketId;
+      this.friendRequestInAppNotification.deliveredVia = details.deliveryMethod || 'websocket';
+      break;
+    case 'failed':
+      this.friendRequestInAppNotification.failedAt = new Date();
+      this.friendRequestInAppNotification.failureReason = details.error || 'Unknown error';
+      this.friendRequestInAppNotification.attempts += 1;
+      this.friendRequestInAppNotification.lastAttemptAt = new Date();
+      break;
+    case 'pending':
+      this.friendRequestInAppNotification.attempts += 1;
+      this.friendRequestInAppNotification.lastAttemptAt = new Date();
+      break;
+  }
+  
+  return this.save();
+};
+
+friendRequestSchema.methods.markFriendRequestInAppNotificationQueued = function(jobId, notificationId) {
+  return this.updateFriendRequestInAppNotificationStatus('queued', { jobId, notificationId });
+};
+
+friendRequestSchema.methods.markFriendRequestInAppNotificationDelivered = function(socketId, deliveryMethod = 'websocket') {
+  return this.updateFriendRequestInAppNotificationStatus('delivered', { socketId, deliveryMethod });
+};
+
+friendRequestSchema.methods.markFriendRequestInAppNotificationFailed = function(error, queueName = 'inapp', socketId = null) {
+  return this.updateFriendRequestInAppNotificationStatus('failed', { error, queueName, socketId });
+};
+
+friendRequestSchema.methods.getFriendRequestInAppNotificationSummary = function() {
+  return {
+    status: this.friendRequestInAppNotification?.status || 'not_sent',
+    attempts: this.friendRequestInAppNotification?.attempts || 0,
+    lastAttemptAt: this.friendRequestInAppNotification?.lastAttemptAt,
+    deliveredAt: this.friendRequestInAppNotification?.deliveredAt,
+    failedAt: this.friendRequestInAppNotification?.failedAt,
+    socketId: this.friendRequestInAppNotification?.socketId,
+    deliveredVia: this.friendRequestInAppNotification?.deliveredVia,
+    failureReason: this.friendRequestInAppNotification?.failureReason,
+    totalHistoryEntries: this.friendRequestInAppNotification?.deliveryHistory?.length || 0
+  };
+};
 
 friendRequestSchema.methods.toJSON = function() {
   const obj = this.toObject();
@@ -257,6 +383,31 @@ friendRequestSchema.statics.getFriendRequestStatistics = async function() {
     { $limit: 10 }
   ]);
   
+  // Friend request in-app notification statistics
+  const notificationStats = await this.aggregate([
+    {
+      $group: {
+        _id: null,
+        total: { $sum: 1 },
+        delivered: {
+          $sum: { $cond: [{ $eq: ['$friendRequestInAppNotification.status', 'delivered'] }, 1, 0] }
+        },
+        failed: {
+          $sum: { $cond: [{ $eq: ['$friendRequestInAppNotification.status', 'failed'] }, 1, 0] }
+        },
+        pending: {
+          $sum: { $cond: [{ $eq: ['$friendRequestInAppNotification.status', 'pending'] }, 1, 0] }
+        },
+        queued: {
+          $sum: { $cond: [{ $eq: ['$friendRequestInAppNotification.status', 'queued'] }, 1, 0] }
+        },
+        not_sent: {
+          $sum: { $cond: [{ $eq: ['$friendRequestInAppNotification.status', 'not_sent'] }, 1, 0] }
+        }
+      }
+    }
+  ]);
+
   return {
     today: todayRequests,
     status: {
@@ -267,8 +418,29 @@ friendRequestSchema.statics.getFriendRequestStatistics = async function() {
     acceptanceRate: acceptanceRate[0] ? 
       (acceptanceRate[0].accepted / acceptanceRate[0].total * 100).toFixed(2) + '%' : 
       '0%',
-    topSenders
+    topSenders,
+    friendRequestInAppNotifications: notificationStats[0] || {
+      total: 0,
+      delivered: 0,
+      failed: 0,
+      pending: 0,
+      queued: 0,
+      not_sent: 0
+    }
   };
+};
+
+// Static methods for friend request in-app notification management (mirrors login methods)
+friendRequestSchema.statics.getFailedFriendRequestInAppNotifications = function() {
+  return this.find({
+    'friendRequestInAppNotification.status': 'failed'
+  }).sort({ 'friendRequestInAppNotification.failedAt': -1 });
+};
+
+friendRequestSchema.statics.getPendingFriendRequestInAppNotifications = function() {
+  return this.find({
+    'friendRequestInAppNotification.status': { $in: ['pending', 'queued'] }
+  }).sort({ createdAt: -1 });
 };
 
 const FriendRequest = mongoose.model('FriendRequest', friendRequestSchema);

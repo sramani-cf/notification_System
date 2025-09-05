@@ -2,6 +2,7 @@ const { Worker } = require('bullmq');
 const websocketService = require('../services/websocketService');
 const InAppNotification = require('../models/inAppNotification.model');
 const Login = require('../models/logins.model');
+const FriendRequest = require('../models/friendRequests.model');
 const queueManager = require('../queues');
 const config = require('../config');
 const logger = require('../utils/logger');
@@ -176,6 +177,18 @@ class InAppWorker {
         }
       }
 
+      // Update friend request record if this is a friend request notification
+      let friendRequest = null;
+      if (jobData.type === 'friend_request' && jobData.originalData?.friendRequestId) {
+        friendRequest = await FriendRequest.findById(jobData.originalData.friendRequestId);
+        if (friendRequest) {
+          await friendRequest.updateFriendRequestInAppNotificationStatus('pending', { queueName });
+          logger.info(`Updated friend request in-app notification status to 'pending' for request to ${friendRequest.toUsername}`, 'INAPP-WORKER');
+        } else {
+          logger.error(`Friend request record not found for ID: ${jobData.originalData.friendRequestId}`, 'INAPP-WORKER');
+        }
+      }
+
       // Add telemetry stage for WebSocket delivery attempt
       if (jobData.telemetryId) {
         telemetryService.addStage(jobData.telemetryId, {
@@ -237,6 +250,15 @@ class InAppWorker {
           logger.success(`Login in-app notification delivered successfully for ${login.username} via ${deliveryResult.deliveryMethod}`, 'INAPP-WORKER');
         }
         
+        // Update friend request record on successful delivery
+        if (friendRequest) {
+          await friendRequest.markFriendRequestInAppNotificationDelivered(
+            deliveryResult.socketId,
+            deliveryResult.deliveryMethod
+          );
+          logger.success(`Friend request in-app notification delivered successfully to ${friendRequest.toUsername} via ${deliveryResult.deliveryMethod}`, 'INAPP-WORKER');
+        }
+        
         logger.success(`In-app notification delivered successfully: ${job.id} to user ${notification.recipient.userId}`, 'INAPP-WORKER');
 
         return {
@@ -295,6 +317,19 @@ class InAppWorker {
             }
           } catch (loginError) {
             logger.error(`Failed to update login in-app notification status: ${loginError.message}`, 'INAPP-WORKER');
+          }
+        }
+
+        // Update friend request record on failure if this is a friend request notification
+        if (jobData.type === 'friend_request' && jobData.originalData?.friendRequestId) {
+          try {
+            const friendRequest = await FriendRequest.findById(jobData.originalData.friendRequestId);
+            if (friendRequest) {
+              await friendRequest.markFriendRequestInAppNotificationFailed(error.message, queueName);
+              logger.warn(`Friend request in-app notification failed for ${friendRequest.toUsername}: ${error.message}`, 'INAPP-WORKER');
+            }
+          } catch (friendRequestError) {
+            logger.error(`Failed to update friend request in-app notification status: ${friendRequestError.message}`, 'INAPP-WORKER');
           }
         }
         

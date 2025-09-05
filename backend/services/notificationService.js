@@ -142,7 +142,9 @@ class NotificationService {
     const validTypes = [
       NOTIFICATION_TYPES.SIGNUP,
       NOTIFICATION_TYPES.LOGIN, 
-      NOTIFICATION_TYPES.RESET_PASSWORD
+      NOTIFICATION_TYPES.RESET_PASSWORD,
+      NOTIFICATION_TYPES.PURCHASE,
+      NOTIFICATION_TYPES.FRIEND_REQUEST
     ];
     return validTypes.includes(type);
   }
