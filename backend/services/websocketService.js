@@ -2,6 +2,7 @@ const { Server } = require('socket.io');
 const { createAdapter } = require('@socket.io/redis-adapter');
 const Redis = require('ioredis');
 const logger = require('../utils/logger');
+const telemetryService = require('./telemetryService');
 
 class WebSocketService {
   constructor() {
@@ -42,6 +43,7 @@ class WebSocketService {
       this.setupRedisAdapter();
 
       this.setupEventHandlers();
+      this.setupTelemetryCollection();
       this.isInitialized = true;
       
       logger.success('WebSocket service initialized successfully', 'WEBSOCKET-SERVICE');
@@ -121,6 +123,15 @@ class WebSocketService {
       // Handle user authentication and registration
       socket.on('authenticate', (data) => {
         logger.info(`Authentication request from socket ${socket.id}`, 'WEBSOCKET-SERVICE');
+        
+        // Add telemetry for authentication event
+        telemetryService.emit('websocket:auth', {
+          socketId: socket.id,
+          userId: data?.userId,
+          timestamp: new Date().toISOString(),
+          status: 'initiated'
+        });
+        
         this.handleAuthentication(socket, data);
       });
 
@@ -232,6 +243,15 @@ class WebSocketService {
         connectedAt: connectionInfo.connectedAt
       });
 
+      // Add telemetry for successful authentication
+      telemetryService.emit('websocket:auth', {
+        socketId: socket.id,
+        userId: userIdStr,
+        username: username,
+        timestamp: new Date().toISOString(),
+        status: 'success'
+      });
+
       logger.success(`User ${username} (${userIdStr}) authenticated with socket ${socket.id}`, 'WEBSOCKET-SERVICE');
 
       // Send any pending notifications for this user
@@ -239,6 +259,15 @@ class WebSocketService {
 
     } catch (error) {
       logger.error(`Authentication error for socket ${socket.id}: ${error.message}`, 'WEBSOCKET-SERVICE');
+      
+      // Add telemetry for failed authentication
+      telemetryService.emit('websocket:auth', {
+        socketId: socket.id,
+        timestamp: new Date().toISOString(),
+        status: 'error',
+        error: error.message
+      });
+      
       socket.emit('auth:error', { message: 'Authentication failed' });
     }
   }
@@ -252,6 +281,15 @@ class WebSocketService {
       
       if (connectionInfo) {
         const { userId, username } = connectionInfo;
+        
+        // Add telemetry for user disconnection
+        telemetryService.emit('websocket:disconnect', {
+          socketId: socket.id,
+          userId: userId,
+          username: username,
+          reason: reason,
+          timestamp: new Date().toISOString()
+        });
         
         // Remove from mappings
         this.connectedClients.delete(userId);
@@ -351,6 +389,16 @@ class WebSocketService {
         priority: notificationData.priority || 'normal'
       };
 
+      // Add telemetry for notification sending attempt
+      telemetryService.emit('websocket:notification', {
+        notificationId: notificationData.id,
+        userId: userId,
+        socketId: connection.socketId,
+        type: notificationData.type,
+        status: 'sending',
+        timestamp: new Date().toISOString()
+      });
+
       // Send to user room (works across all servers with Redis adapter)
       this.io.to(`user:${userIdStr}`).emit('notification:new', notificationPayload);
       
@@ -358,6 +406,17 @@ class WebSocketService {
       if (connection.socket.connected) {
         connection.socket.emit('notification:new', notificationPayload);
       }
+
+      // Add telemetry for successful notification delivery
+      telemetryService.emit('websocket:notification', {
+        notificationId: notificationData.id,
+        userId: userId,
+        socketId: connection.socketId,
+        type: notificationData.type,
+        status: 'delivered',
+        timestamp: new Date().toISOString(),
+        deliveryMethod: 'websocket'
+      });
 
       logger.success(`Sent notification ${notificationData.id} to user ${userId} via socket ${connection.socketId}`, 'WEBSOCKET-SERVICE');
 
@@ -371,6 +430,17 @@ class WebSocketService {
 
     } catch (error) {
       logger.error(`Failed to send notification to user ${userId}: ${error.message}`, 'WEBSOCKET-SERVICE');
+      
+      // Add telemetry for notification delivery failure
+      telemetryService.emit('websocket:notification', {
+        notificationId: notificationData.id,
+        userId: userId,
+        type: notificationData.type,
+        status: 'error',
+        error: error.message,
+        timestamp: new Date().toISOString()
+      });
+      
       return {
         success: false,
         reason: error.message,
@@ -435,6 +505,36 @@ class WebSocketService {
       logger.error(`Failed to broadcast notification: ${error.message}`, 'WEBSOCKET-SERVICE');
       return false;
     }
+  }
+
+  /**
+   * Set up telemetry collection for WebSocket metrics
+   */
+  setupTelemetryCollection() {
+    // Collect and emit WebSocket metrics every 3 seconds
+    this.telemetryInterval = setInterval(() => {
+      try {
+        const stats = this.getConnectionStats();
+        
+        telemetryService.updateComponentMetrics('WEBSOCKET-SERVICE', {
+          totalConnections: stats.totalConnections,
+          authenticatedUsers: stats.authenticatedUsers,
+          uptime: process.uptime(),
+          memoryUsage: process.memoryUsage().heapUsed,
+          timestamp: new Date().toISOString(),
+          status: this.isInitialized ? 'healthy' : 'unhealthy'
+        });
+
+        // Emit periodic connection stats
+        telemetryService.emit('websocket:stats', {
+          ...stats,
+          timestamp: new Date().toISOString()
+        });
+        
+      } catch (error) {
+        logger.error(`Error collecting WebSocket telemetry: ${error.message}`, 'WEBSOCKET-SERVICE');
+      }
+    }, 3000);
   }
 
   /**
@@ -503,6 +603,11 @@ class WebSocketService {
   async shutdown() {
     try {
       if (this.io) {
+        // Clear telemetry interval
+        if (this.telemetryInterval) {
+          clearInterval(this.telemetryInterval);
+        }
+        
         // Disconnect all clients
         this.io.disconnectSockets(true);
         

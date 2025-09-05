@@ -77,11 +77,21 @@ const config = {
       concurrency: parseInt(process.env.INAPP_QUEUE_CONCURRENCY) || 10,
       attempts: parseInt(process.env.INAPP_MAX_ATTEMPTS) || 3
     },
-    inappRetry: {
-      name: 'inapp-retry-queue',
-      delay: parseInt(process.env.INAPP_RETRY_DELAY) || 60000, // 1 minute
-      concurrency: parseInt(process.env.INAPP_RETRY_CONCURRENCY) || 5,
-      attempts: parseInt(process.env.INAPP_RETRY_MAX_ATTEMPTS) || 2
+    inappRetry1: {
+      name: 'inapp-retry-1-queue',
+      delay: parseInt(process.env.INAPP_RETRY_1_DELAY) || 120000, // 2 minutes
+      concurrency: parseInt(process.env.INAPP_RETRY_1_CONCURRENCY) || 5,
+      attempts: parseInt(process.env.INAPP_RETRY_1_MAX_ATTEMPTS) || 3
+    },
+    inappRetry2: {
+      name: 'inapp-retry-2-queue', 
+      delay: parseInt(process.env.INAPP_RETRY_2_DELAY) || 600000, // 10 minutes
+      concurrency: parseInt(process.env.INAPP_RETRY_2_CONCURRENCY) || 3,
+      attempts: parseInt(process.env.INAPP_RETRY_2_MAX_ATTEMPTS) || 2
+    },
+    inappDlq: {
+      name: 'inapp-dead-letter-queue',
+      concurrency: parseInt(process.env.INAPP_DLQ_CONCURRENCY) || 1
     }
   },
 

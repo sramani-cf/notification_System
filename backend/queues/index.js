@@ -2,6 +2,7 @@ const { Queue, Worker } = require('bullmq');
 const Redis = require('ioredis');
 const config = require('../config');
 const logger = require('../utils/logger');
+const telemetryService = require('../services/telemetryService');
 
 class QueueManager {
   constructor() {
@@ -69,6 +70,9 @@ class QueueManager {
       }
     });
 
+    // Add telemetry event listeners for mail queue
+    this.addQueueTelemetry(this.queues.mail, 'mail');
+
     // Retry-1 queue - 5 minute delay for first escalation
     this.queues.retry1 = new Queue(config.queues.retry1.name, {
       connection,
@@ -85,6 +89,7 @@ class QueueManager {
         }
       }
     });
+    this.addQueueTelemetry(this.queues.retry1, 'retry1');
 
     // Retry-2 queue - 30 minute delay for second escalation  
     this.queues.retry2 = new Queue(config.queues.retry2.name, {
@@ -102,6 +107,7 @@ class QueueManager {
         }
       }
     });
+    this.addQueueTelemetry(this.queues.retry2, 'retry2');
 
     // Dead Letter Queue - for permanently failed messages
     this.queues.dlq = new Queue(config.queues.dlq.name, {
@@ -112,6 +118,7 @@ class QueueManager {
         attempts: 1 // No retries in DLQ
       }
     });
+    this.addQueueTelemetry(this.queues.dlq, 'dlq');
 
     // In-app notification queue - handles real-time notifications via WebSocket
     this.queues.inapp = new Queue(config.queues.inapp.name, {
@@ -128,15 +135,16 @@ class QueueManager {
         }
       }
     });
+    this.addQueueTelemetry(this.queues.inapp, 'inapp');
 
-    // In-app retry queue - for failed in-app notifications
-    this.queues.inappRetry = new Queue(config.queues.inappRetry.name, {
+    // In-app retry-1 queue - 2 minute delay for first escalation
+    this.queues.inappRetry1 = new Queue(config.queues.inappRetry1.name, {
       connection,
       defaultJobOptions: {
         removeOnComplete: 100,
         removeOnFail: 50,
-        delay: config.queues.inappRetry.delay,
-        attempts: config.queues.inappRetry.attempts,
+        delay: config.queues.inappRetry1.delay,
+        attempts: config.queues.inappRetry1.attempts,
         backoff: {
           type: 'exponential',
           settings: {
@@ -145,8 +153,124 @@ class QueueManager {
         }
       }
     });
+    this.addQueueTelemetry(this.queues.inappRetry1, 'inappRetry1');
 
-    logger.info('All queues (including in-app notification queues) initialized successfully', 'QUEUE-MANAGER');
+    // In-app retry-2 queue - 10 minute delay for second escalation
+    this.queues.inappRetry2 = new Queue(config.queues.inappRetry2.name, {
+      connection,
+      defaultJobOptions: {
+        removeOnComplete: 100,
+        removeOnFail: 50,
+        delay: config.queues.inappRetry2.delay,
+        attempts: config.queues.inappRetry2.attempts,
+        backoff: {
+          type: 'exponential',
+          settings: {
+            delay: 2000
+          }
+        }
+      }
+    });
+    this.addQueueTelemetry(this.queues.inappRetry2, 'inappRetry2');
+
+    // In-app Dead Letter Queue - for permanently failed in-app notifications
+    this.queues.inappDlq = new Queue(config.queues.inappDlq.name, {
+      connection,
+      defaultJobOptions: {
+        removeOnComplete: 500,
+        removeOnFail: 200,
+        attempts: 1 // No retries in DLQ
+      }
+    });
+    this.addQueueTelemetry(this.queues.inappDlq, 'inappDlq');
+
+    logger.info('All queues (including enhanced in-app notification retry queues) initialized successfully', 'QUEUE-MANAGER');
+  }
+
+  addQueueTelemetry(queue, queueName) {
+    // Job added to queue
+    queue.on('added', (job) => {
+      telemetryService.addStage(job.data.telemetryId, {
+        component: `QUEUE-${queueName.toUpperCase()}`,
+        stage: 'job:added',
+        status: 'processing',
+        metadata: {
+          jobId: job.id,
+          priority: job.opts.priority,
+          delay: job.opts.delay,
+          attempts: job.opts.attempts
+        }
+      });
+      
+      telemetryService.updateComponentMetrics(`QUEUE-${queueName.toUpperCase()}`, {
+        jobsAdded: telemetryService.getComponentMetrics(`QUEUE-${queueName.toUpperCase()}`)?.jobsAdded + 1 || 1
+      });
+    });
+
+    // Job started processing
+    queue.on('active', (job) => {
+      telemetryService.addStage(job.data.telemetryId, {
+        component: `QUEUE-${queueName.toUpperCase()}`,
+        stage: 'job:processing',
+        status: 'processing',
+        metadata: {
+          jobId: job.id,
+          processedBy: job.processedBy,
+          attemptsMade: job.attemptsMade
+        }
+      });
+    });
+
+    // Job completed successfully
+    queue.on('completed', (job) => {
+      telemetryService.addStage(job.data.telemetryId, {
+        component: `QUEUE-${queueName.toUpperCase()}`,
+        stage: 'job:completed',
+        status: 'success',
+        metadata: {
+          jobId: job.id,
+          returnValue: job.returnvalue,
+          processingTime: job.finishedOn - job.processedOn
+        }
+      });
+      
+      telemetryService.updateComponentMetrics(`QUEUE-${queueName.toUpperCase()}`, {
+        jobsCompleted: telemetryService.getComponentMetrics(`QUEUE-${queueName.toUpperCase()}`)?.jobsCompleted + 1 || 1
+      });
+    });
+
+    // Job failed
+    queue.on('failed', (job, err) => {
+      telemetryService.addStage(job.data.telemetryId, {
+        component: `QUEUE-${queueName.toUpperCase()}`,
+        stage: 'job:failed',
+        status: 'error',
+        error: err.message,
+        metadata: {
+          jobId: job.id,
+          attemptsMade: job.attemptsMade,
+          maxAttempts: job.opts.attempts,
+          failedReason: err.message
+        }
+      });
+      
+      telemetryService.updateComponentMetrics(`QUEUE-${queueName.toUpperCase()}`, {
+        jobsFailed: telemetryService.getComponentMetrics(`QUEUE-${queueName.toUpperCase()}`)?.jobsFailed + 1 || 1
+      });
+    });
+
+    // Job stalled (taking too long)
+    queue.on('stalled', (job) => {
+      telemetryService.addStage(job.data.telemetryId, {
+        component: `QUEUE-${queueName.toUpperCase()}`,
+        stage: 'job:stalled',
+        status: 'warning',
+        metadata: {
+          jobId: job.id,
+          stalledAt: new Date().toISOString()
+        }
+      });
+    });
   }
 
   async addEmailJob(queueName, jobData, options = {}) {
@@ -195,6 +319,36 @@ class QueueManager {
       return job;
     } catch (error) {
       logger.error(`Failed to add in-app job to ${queueName} queue: ${error.message}`, 'QUEUE-MANAGER');
+      throw error;
+    }
+  }
+
+  async addInAppRetryJob(queueName, jobData, options = {}) {
+    if (!this.isInitialized) {
+      throw new Error('Queue manager not initialized');
+    }
+
+    const validRetryQueues = ['inappRetry1', 'inappRetry2', 'inappDlq'];
+    if (!validRetryQueues.includes(queueName)) {
+      throw new Error(`Invalid in-app retry queue: ${queueName}`);
+    }
+
+    const queue = this.queues[queueName];
+    if (!queue) {
+      throw new Error(`Queue '${queueName}' not found`);
+    }
+
+    try {
+      const job = await queue.add(`${jobData.type}-inapp-retry`, jobData, {
+        ...options,
+        priority: this.getJobPriority(jobData.type),
+        jobId: jobData.notificationId ? `inapp-retry-${jobData.notificationId}` : undefined
+      });
+
+      logger.info(`Added in-app retry job to ${queueName} queue: ${job.id}`, 'QUEUE-MANAGER');
+      return job;
+    } catch (error) {
+      logger.error(`Failed to add in-app retry job to ${queueName} queue: ${error.message}`, 'QUEUE-MANAGER');
       throw error;
     }
   }

@@ -79,7 +79,7 @@ const inAppNotificationSchema = new mongoose.Schema({
   },
   queueName: {
     type: String,
-    enum: ['inapp', 'inapp-retry'],
+    enum: ['inapp', 'inapp-retry-1', 'inapp-retry-2', 'inapp-dlq'],
     default: 'inapp'
   },
   jobId: {
@@ -113,7 +113,15 @@ const inAppNotificationSchema = new mongoose.Schema({
       status: String,
       error: String,
       socketId: String,
-      deliveryMethod: String
+      deliveryMethod: String,
+      queueName: String
+    }],
+    escalationHistory: [{
+      fromQueue: String,
+      toQueue: String,
+      timestamp: Date,
+      reason: String,
+      attempts: Number
     }]
   },
   assignedServer: {
@@ -139,6 +147,7 @@ inAppNotificationSchema.pre('save', function(next) {
   if (this.isNew) {
     this.metadata = this.metadata || {};
     this.metadata.deliveryHistory = this.metadata.deliveryHistory || [];
+    this.metadata.escalationHistory = this.metadata.escalationHistory || [];
   }
   
   // Update status timestamps
@@ -178,7 +187,8 @@ inAppNotificationSchema.methods.markAsDelivered = function(socketId, deliveryMet
     timestamp: new Date(),
     status: 'delivered',
     socketId: socketId,
-    deliveryMethod: deliveryMethod
+    deliveryMethod: deliveryMethod,
+    queueName: this.queueName
   });
   
   return this.save();
@@ -197,7 +207,8 @@ inAppNotificationSchema.methods.markAsFailed = function(reason, socketId = null)
     status: 'failed',
     error: reason,
     socketId: socketId || null,
-    deliveryMethod: 'websocket'
+    deliveryMethod: 'websocket',
+    queueName: this.queueName
   });
   
   return this.save();
@@ -215,7 +226,8 @@ inAppNotificationSchema.methods.incrementAttempt = function(queueName, error = n
     timestamp: new Date(),
     status: 'processing',
     error: error || null,
-    deliveryMethod: 'websocket'
+    deliveryMethod: 'websocket',
+    queueName: this.queueName
   });
   
   return this.save();
@@ -236,6 +248,19 @@ inAppNotificationSchema.methods.markAsRead = function() {
 
 inAppNotificationSchema.methods.isExpired = function() {
   return new Date() > this.expiresAt;
+};
+
+inAppNotificationSchema.methods.trackEscalation = function(fromQueue, toQueue, reason) {
+  this.metadata.escalationHistory = this.metadata.escalationHistory || [];
+  this.metadata.escalationHistory.push({
+    fromQueue: fromQueue,
+    toQueue: toQueue,
+    timestamp: new Date(),
+    reason: reason,
+    attempts: this.attempts
+  });
+  
+  return this.save();
 };
 
 // Static methods

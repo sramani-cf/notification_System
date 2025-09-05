@@ -7,6 +7,7 @@ const ResetPassword = require('../models/resetPasswords.model');
 const queueManager = require('../queues');
 const config = require('../config');
 const logger = require('../utils/logger');
+const telemetryService = require('../services/telemetryService');
 
 class MailWorker {
   constructor() {
@@ -57,6 +58,22 @@ class MailWorker {
   async processEmailJob(job, queueName) {
     const jobData = job.data;
     logger.info(`Processing ${jobData.type} email job ${job.id} from ${queueName} queue`, 'MAIL-WORKER');
+
+    // Add telemetry stage for worker processing start
+    if (jobData.telemetryId) {
+      telemetryService.addStage(jobData.telemetryId, {
+        component: 'MAIL-WORKER',
+        stage: 'worker:processing',
+        status: 'processing',
+        metadata: {
+          jobId: job.id,
+          queueName: queueName,
+          workerType: 'email',
+          emailType: jobData.type,
+          recipient: jobData.recipient?.email
+        }
+      });
+    }
 
     let notification = null;
 
@@ -154,6 +171,21 @@ class MailWorker {
         }
       }
 
+      // Add telemetry stage for email sending attempt
+      if (jobData.telemetryId) {
+        telemetryService.addStage(jobData.telemetryId, {
+          component: 'MAIL-WORKER',
+          stage: 'email:sending',
+          status: 'processing',
+          metadata: {
+            provider: 'gmail',
+            recipient: jobData.recipient.email,
+            subject: jobData.subject,
+            attempt: notification.attempts
+          }
+        });
+      }
+
       // Send email using the HTML content we have
       let result;
       result = await emailService.sendEmail({
@@ -165,6 +197,21 @@ class MailWorker {
 
       // Mark as delivered
       await notification.markAsDelivered();
+      
+      // Add telemetry stage for successful email delivery
+      if (jobData.telemetryId) {
+        telemetryService.addStage(jobData.telemetryId, {
+          component: 'MAIL-WORKER',
+          stage: 'email:delivered',
+          status: 'success',
+          metadata: {
+            messageId: result.messageId,
+            response: result.response,
+            deliveryTime: new Date().toISOString(),
+            provider: 'gmail'
+          }
+        });
+      }
       
       // Update signup record on successful delivery
       if (signup) {
@@ -195,6 +242,22 @@ class MailWorker {
 
     } catch (error) {
       logger.error(`Failed to process email job ${job.id}: ${error.message}`, 'MAIL-WORKER');
+
+      // Add telemetry stage for email failure
+      if (jobData.telemetryId) {
+        telemetryService.addStage(jobData.telemetryId, {
+          component: 'MAIL-WORKER',
+          stage: 'email:failed',
+          status: 'error',
+          error: error.message,
+          metadata: {
+            jobId: job.id,
+            attempt: notification?.attempts || 0,
+            errorType: error.name || 'EmailError',
+            queueName: queueName
+          }
+        });
+      }
 
       if (notification) {
         // Update signup record on failure if this is a welcome email

@@ -8,6 +8,7 @@ const purchaseRoutes = require('./purchase.routes');
 const signupRoutes = require('./signup.routes');
 const friendRequestRoutes = require('./friendRequest.routes');
 const sessionRoutes = require('./session.routes');
+const liveViewRoutes = require('./liveView.routes');
 
 const { attachServerInfo, logRequest, sanitizeInput } = require('../middleware/auth');
 
@@ -23,5 +24,6 @@ router.use('/purchases', purchaseRoutes);
 router.use('/friend-requests', friendRequestRoutes);
 router.use('/session', sessionRoutes);
 router.use('/sessions', sessionRoutes);
+router.use('/live-view', liveViewRoutes);
 
 module.exports = router;

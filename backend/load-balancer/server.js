@@ -4,6 +4,7 @@ const { createProxyMiddleware } = require('http-proxy-middleware');
 const axios = require('axios');
 const http = require('http');
 const logger = require('../utils/logger');
+const telemetryService = require('../services/telemetryService');
 
 const app = express();
 const server = http.createServer(app);
@@ -230,6 +231,38 @@ const proxyOptions = {
     proxyReq.setHeader('X-Request-ID', requestId);
     proxyReq.setHeader('X-Load-Balancer', 'Active');
     
+    // Track telemetry for API requests (not Socket.IO)
+    if (req.url && req.url.startsWith('/api/')) {
+      try {
+        const requestType = req.url.includes('/signups') ? 'signup' :
+                           req.url.includes('/logins') ? 'login' :
+                           req.url.includes('/reset-passwords') ? 'reset_password' :
+                           req.url.includes('/purchases') ? 'purchase' :
+                           req.url.includes('/friend-requests') ? 'friend_request' :
+                           'api_request';
+        
+        const telemetryId = telemetryService.trackRequest(requestType, {
+          method: req.method,
+          url: req.url,
+          ip: req.headers['x-forwarded-for'] || req.connection.remoteAddress,
+          userAgent: req.headers['user-agent'],
+          serverInfo: 'LOAD-BALANCER'
+        });
+        
+        // Store telemetry ID for response tracking
+        proxyReq.setHeader('X-Telemetry-ID', telemetryId);
+        
+        // Update to load balancer stage
+        telemetryService.updateRequestStage(telemetryId, 'load-balancer', 'LoadBalancer', {
+          selectedServer: proxyReq.getHeader('host') || 'unknown',
+          algorithm: 'round-robin'
+        });
+        
+      } catch (error) {
+        logger.warn(`Telemetry tracking failed: ${error.message}`, 'BALANCER');
+      }
+    }
+    
     // Log Socket.IO requests for debugging
     if (req.url && req.url.startsWith('/socket.io/')) {
       logger.info(`Socket.IO HTTP request: ${req.method} ${req.url}`, 'BALANCER');
@@ -247,6 +280,20 @@ const proxyOptions = {
     const serverHeader = proxyRes.headers['x-server-info'];
     if (serverHeader) {
       logger.info(`Response from ${serverHeader}`, 'BALANCER');
+    }
+    
+    // Complete telemetry tracking for load balancer stage
+    const telemetryId = proxyRes.headers['x-telemetry-id'] || req.headers['x-telemetry-id'];
+    if (telemetryId && req.url && req.url.startsWith('/api/')) {
+      try {
+        telemetryService.completeRequestStage(telemetryId, {
+          statusCode: proxyRes.statusCode,
+          responseHeaders: Object.keys(proxyRes.headers).length,
+          targetServer: serverHeader || 'unknown'
+        });
+      } catch (error) {
+        logger.warn(`Telemetry completion failed: ${error.message}`, 'BALANCER');
+      }
     }
   },
   onProxyReqWs: (proxyReq, req, socket, options, head) => {
@@ -412,11 +459,49 @@ app.use((err, req, res, next) => {
   });
 });
 
+// Collect load balancer metrics periodically
+const collectLoadBalancerMetrics = () => {
+  try {
+    const healthyServers = servers.filter(s => s.healthy);
+    const unhealthyServers = servers.filter(s => !s.healthy);
+    
+    const metrics = {
+      status: healthyServers.length > 0 ? 'healthy' : 'critical',
+      totalServers: servers.length,
+      healthyServers: healthyServers.length,
+      unhealthyServers: unhealthyServers.length,
+      currentIndex: currentServerIndex,
+      servers: servers.map(server => ({
+        name: server.name,
+        url: server.url,
+        healthy: server.healthy
+      })),
+      stickySessions: {
+        totalSessions: sessionToServer.size,
+        totalClients: clientToServer.size
+      },
+      uptime: process.uptime() * 1000,
+      timestamp: new Date()
+    };
+    
+    telemetryService.updateComponentMetrics('LoadBalancer', metrics);
+  } catch (error) {
+    logger.warn(`Failed to collect load balancer metrics: ${error.message}`, 'BALANCER');
+  }
+};
+
+// Start metrics collection
+setInterval(collectLoadBalancerMetrics, 2000); // Every 2 seconds
+
 server.listen(PORT, () => {
   logger.success(`Load Balancer running on port ${PORT}`, 'BALANCER');
   logger.info(`Managing ${servers.length} backend servers`, 'BALANCER');
   logger.info('WebSocket support enabled', 'BALANCER');
   logger.info('Starting health checks...', 'BALANCER');
+  logger.info('Telemetry metrics collection started', 'BALANCER');
+  
+  // Collect initial metrics
+  setTimeout(collectLoadBalancerMetrics, 1000);
 });
 
 process.on('SIGTERM', () => {

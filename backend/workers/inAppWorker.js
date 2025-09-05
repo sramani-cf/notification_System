@@ -5,6 +5,7 @@ const Login = require('../models/logins.model');
 const queueManager = require('../queues');
 const config = require('../config');
 const logger = require('../utils/logger');
+const telemetryService = require('../services/telemetryService');
 
 class InAppWorker {
   constructor() {
@@ -36,16 +37,44 @@ class InAppWorker {
         }
       );
 
-      // Initialize in-app retry queue worker
-      this.workers.inappRetry = new Worker(
-        config.queues.inappRetry.name,
-        async (job) => this.processInAppNotificationJob(job, 'inapp-retry'),
+      // Initialize in-app retry-1 queue worker
+      this.workers.inappRetry1 = new Worker(
+        config.queues.inappRetry1.name,
+        async (job) => this.processInAppNotificationJob(job, 'inapp-retry-1'),
         {
           connection,
-          concurrency: config.queues.inappRetry.concurrency,
+          concurrency: config.queues.inappRetry1.concurrency,
           limiter: {
             max: 10, // Lower limit for retry queue
             duration: 1000
+          }
+        }
+      );
+
+      // Initialize in-app retry-2 queue worker
+      this.workers.inappRetry2 = new Worker(
+        config.queues.inappRetry2.name,
+        async (job) => this.processInAppNotificationJob(job, 'inapp-retry-2'),
+        {
+          connection,
+          concurrency: config.queues.inappRetry2.concurrency,
+          limiter: {
+            max: 5, // Even lower limit for second retry queue
+            duration: 1000
+          }
+        }
+      );
+
+      // Initialize in-app DLQ worker
+      this.workers.inappDlq = new Worker(
+        config.queues.inappDlq.name,
+        async (job) => this.processDLQJob(job),
+        {
+          connection,
+          concurrency: config.queues.inappDlq.concurrency,
+          limiter: {
+            max: 1, // Very low limit for DLQ processing
+            duration: 5000
           }
         }
       );
@@ -65,6 +94,22 @@ class InAppWorker {
   async processInAppNotificationJob(job, queueName) {
     const jobData = job.data;
     logger.info(`Processing ${jobData.type} in-app notification job ${job.id} from ${queueName} queue`, 'INAPP-WORKER');
+
+    // Add telemetry stage for in-app worker processing start
+    if (jobData.telemetryId) {
+      telemetryService.addStage(jobData.telemetryId, {
+        component: 'INAPP-WORKER',
+        stage: 'worker:processing',
+        status: 'processing',
+        metadata: {
+          jobId: job.id,
+          queueName: queueName,
+          workerType: 'inapp',
+          notificationType: jobData.type,
+          recipientUserId: jobData.recipient?.userId
+        }
+      });
+    }
 
     let notification = null;
 
@@ -131,6 +176,22 @@ class InAppWorker {
         }
       }
 
+      // Add telemetry stage for WebSocket delivery attempt
+      if (jobData.telemetryId) {
+        telemetryService.addStage(jobData.telemetryId, {
+          component: 'INAPP-WORKER',
+          stage: 'websocket:sending',
+          status: 'processing',
+          metadata: {
+            recipientUserId: notification.recipient.userId,
+            notificationId: notification._id,
+            title: notification.title,
+            priority: notification.priority,
+            attempt: notification.attempts
+          }
+        });
+      }
+
       // Send notification via WebSocket
       const deliveryResult = await websocketService.sendNotificationToUser(
         notification.recipient.userId,
@@ -146,6 +207,21 @@ class InAppWorker {
       );
 
       if (deliveryResult.success) {
+        // Add telemetry stage for successful WebSocket delivery
+        if (jobData.telemetryId) {
+          telemetryService.addStage(jobData.telemetryId, {
+            component: 'INAPP-WORKER',
+            stage: 'websocket:delivered',
+            status: 'success',
+            metadata: {
+              socketId: deliveryResult.socketId,
+              deliveryMethod: deliveryResult.deliveryMethod,
+              deliveryTime: new Date().toISOString(),
+              recipientUserId: notification.recipient.userId
+            }
+          });
+        }
+        
         // Mark as delivered
         await notification.markAsDelivered(
           deliveryResult.socketId,
@@ -170,12 +246,43 @@ class InAppWorker {
           notificationId: notification._id
         };
       } else {
+        // Add telemetry stage for WebSocket delivery failure
+        if (jobData.telemetryId) {
+          telemetryService.addStage(jobData.telemetryId, {
+            component: 'INAPP-WORKER',
+            stage: 'websocket:failed',
+            status: 'error',
+            error: deliveryResult.reason || 'Failed to deliver notification',
+            metadata: {
+              reason: deliveryResult.reason,
+              recipientUserId: notification.recipient.userId,
+              attempt: notification.attempts
+            }
+          });
+        }
+        
         // Handle delivery failure
         throw new Error(deliveryResult.reason || 'Failed to deliver notification');
       }
 
     } catch (error) {
       logger.error(`Failed to process in-app notification job ${job.id}: ${error.message}`, 'INAPP-WORKER');
+
+      // Add telemetry stage for job failure
+      if (jobData.telemetryId) {
+        telemetryService.addStage(jobData.telemetryId, {
+          component: 'INAPP-WORKER',
+          stage: 'job:failed',
+          status: 'error',
+          error: error.message,
+          metadata: {
+            jobId: job.id,
+            attempt: notification?.attempts || 0,
+            errorType: error.name || 'InAppNotificationError',
+            queueName: queueName
+          }
+        });
+      }
 
       if (notification) {
         // Update login record on failure if this is a login alert notification
@@ -200,14 +307,28 @@ class InAppWorker {
   }
 
   async handleFailedJob(job, notification, error, currentQueue) {
-    const maxAttempts = notification.maxAttempts;
-    const currentAttempts = notification.attempts;
+    // Get max attempts based on current queue
+    let maxAttempts;
+    switch (currentQueue) {
+      case 'inapp':
+        maxAttempts = config.queues.inapp.attempts;
+        break;
+      case 'inapp-retry-1':
+        maxAttempts = config.queues.inappRetry1.attempts;
+        break;
+      case 'inapp-retry-2':
+        maxAttempts = config.queues.inappRetry2.attempts;
+        break;
+      default:
+        maxAttempts = notification.maxAttempts;
+    }
 
-    logger.info(`Handling failed in-app job ${job.id}. Attempt ${currentAttempts}/${maxAttempts}`, 'INAPP-WORKER');
+    const currentAttempts = notification.attempts;
+    logger.info(`Handling failed in-app job ${job.id}. Attempt ${currentAttempts}/${maxAttempts} in ${currentQueue}`, 'INAPP-WORKER');
 
     try {
       if (currentAttempts >= maxAttempts) {
-        // Escalate to retry queue or mark as failed
+        // Escalate to next queue or DLQ
         await this.escalateJob(job, notification, currentQueue);
       } else {
         // Job will be retried by BullMQ's built-in retry mechanism
@@ -222,24 +343,32 @@ class InAppWorker {
     const jobData = job.data;
     
     try {
-      let nextAction;
+      let nextQueue;
       switch (currentQueue) {
         case 'inapp':
-          nextAction = 'retry';
-          logger.info(`Escalating in-app job ${job.id} to retry queue (1 min delay)`, 'INAPP-WORKER');
+          nextQueue = 'inappRetry1';
+          logger.info(`Escalating in-app job ${job.id} to retry-1 queue (2 min delay)`, 'INAPP-WORKER');
           break;
-        case 'inapp-retry':
-          nextAction = 'fail';
-          logger.warn(`In-app job ${job.id} exhausted all retries, marking as failed`, 'INAPP-WORKER');
+        case 'inapp-retry-1':
+          nextQueue = 'inappRetry2';
+          logger.info(`Escalating in-app job ${job.id} to retry-2 queue (10 min delay)`, 'INAPP-WORKER');
+          break;
+        case 'inapp-retry-2':
+          nextQueue = 'inappDlq';
+          logger.warn(`Escalating in-app job ${job.id} to dead letter queue`, 'INAPP-WORKER');
           break;
         default:
-          nextAction = 'fail';
-          logger.warn(`Unknown queue ${currentQueue}, marking in-app job ${job.id} as failed`, 'INAPP-WORKER');
+          nextQueue = 'inappDlq';
+          logger.warn(`Unknown queue ${currentQueue}, sending in-app job ${job.id} to DLQ`, 'INAPP-WORKER');
       }
 
-      if (nextAction === 'fail') {
+      if (nextQueue === 'inappDlq') {
         // Mark as permanently failed
         await notification.markAsFailed(`Max retries exceeded. Last error: ${job.failedReason}`);
+        
+        // Track escalation to DLQ
+        await notification.trackEscalation(currentQueue, nextQueue, 'Max retries exceeded');
+        
         logger.error(`In-app notification permanently failed - requires manual intervention: ${JSON.stringify({
           notificationId: notification._id,
           type: jobData.type,
@@ -248,25 +377,68 @@ class InAppWorker {
           failureReason: notification.failureReason
         })}`, 'INAPP-WORKER');
       } else {
-        // Reset attempt count for the retry queue
+        // Track escalation
+        await notification.trackEscalation(currentQueue, nextQueue, `Failed after ${notification.attempts} attempts`);
+        
+        // Reset attempt count for the new queue
         notification.attempts = 0;
-        notification.queueName = 'inapp-retry';
+        notification.queueName = nextQueue === 'inappRetry1' ? 'inapp-retry-1' : 
+                                nextQueue === 'inappRetry2' ? 'inapp-retry-2' : 'inapp-dlq';
         await notification.save();
-
-        // Add job to retry queue
-        await queueManager.addInAppJob('inappRetry', {
-          ...jobData,
-          notificationId: notification._id.toString()
-        });
-
-        logger.info(`Successfully escalated in-app job ${job.id} to retry queue`, 'INAPP-WORKER');
       }
+
+      // Add job to next queue
+      await queueManager.addInAppRetryJob(nextQueue, {
+        ...jobData,
+        notificationId: notification._id.toString()
+      });
+
+      logger.info(`Successfully escalated in-app job ${job.id} to ${nextQueue} queue`, 'INAPP-WORKER');
     } catch (error) {
       logger.error(`Failed to escalate in-app job ${job.id}: ${error.message}`, 'INAPP-WORKER');
       // As a fallback, mark as failed
       if (notification) {
         await notification.markAsFailed(`Escalation failed: ${error.message}`);
       }
+    }
+  }
+
+  async processDLQJob(job) {
+    const jobData = job.data;
+    logger.warn(`Processing in-app DLQ job ${job.id} for ${jobData.type} notification`, 'INAPP-WORKER');
+
+    try {
+      // Find notification record
+      let notification = null;
+      if (jobData.notificationId) {
+        notification = await InAppNotification.findById(jobData.notificationId);
+      }
+
+      if (notification) {
+        // Mark as permanently failed if not already
+        if (notification.status !== 'failed') {
+          await notification.markAsFailed('Reached dead letter queue - permanent failure');
+        }
+
+        // Log for manual intervention
+        logger.error(`In-app notification permanently failed - manual intervention required: ${JSON.stringify({
+          notificationId: notification._id,
+          type: jobData.type,
+          recipient: jobData.recipient.userId,
+          attempts: notification.attempts,
+          failureReason: notification.failureReason,
+          escalationHistory: notification.metadata?.escalationHistory || []
+        })}`, 'INAPP-WORKER');
+      }
+
+      return {
+        success: false,
+        reason: 'Reached dead letter queue',
+        requiresManualIntervention: true
+      };
+    } catch (error) {
+      logger.error(`Failed to process in-app DLQ job ${job.id}: ${error.message}`, 'INAPP-WORKER');
+      throw error;
     }
   }
 

@@ -7,6 +7,7 @@ const notificationService = require('../services/notificationService');
 const mailWorker = require('../workers/mailWorker');
 const inAppWorker = require('../workers/inAppWorker');
 const websocketService = require('../services/websocketService');
+const telemetryService = require('../services/telemetryService');
 const logger = require('../utils/logger');
 const http = require('http');
 
@@ -38,6 +39,47 @@ app.use((req, res, next) => {
       logger.warn(`Slow request: ${req.method} ${req.originalUrl} took ${duration}ms`, SERVER_NAME);
     }
   });
+  
+  next();
+});
+
+// Telemetry middleware
+app.use((req, res, next) => {
+  // Get telemetry ID from load balancer
+  const telemetryId = req.headers['x-telemetry-id'];
+  
+  if (telemetryId && req.url.startsWith('/api/')) {
+    try {
+      // Update to server stage
+      telemetryService.updateRequestStage(telemetryId, 'server', SERVER_NAME, {
+        method: req.method,
+        url: req.url,
+        serverPort: PORT
+      });
+      
+      // Store telemetry ID in request for later use
+      req.telemetryId = telemetryId;
+      
+      // Pass telemetry ID in response headers
+      res.setHeader('X-Telemetry-ID', telemetryId);
+      
+      // Track when request processing completes
+      res.on('finish', () => {
+        try {
+          telemetryService.completeRequestStage(telemetryId, {
+            statusCode: res.statusCode,
+            server: SERVER_NAME,
+            duration: Date.now() - req.startTime
+          });
+        } catch (error) {
+          logger.warn(`Failed to complete server telemetry: ${error.message}`, SERVER_NAME);
+        }
+      });
+      
+    } catch (error) {
+      logger.warn(`Server telemetry error: ${error.message}`, SERVER_NAME);
+    }
+  }
   
   next();
 });
@@ -118,10 +160,43 @@ const startServer = async () => {
     websocketService.initialize(server, corsOptions);
     logger.success('WebSocket service initialized', SERVER_NAME);
     
+    // Initialize telemetry with WebSocket service
+    telemetryService.initialize(websocketService.io);
+    logger.success('Telemetry service initialized', SERVER_NAME);
+    
+    // Set up server metrics collection
+    const collectServerMetrics = () => {
+      try {
+        const metrics = {
+          status: 'healthy',
+          serverName: SERVER_NAME,
+          port: PORT,
+          pid: process.pid,
+          uptime: process.uptime() * 1000,
+          memoryUsage: process.memoryUsage(),
+          cpuUsage: process.cpuUsage(),
+          activeConnections: websocketService.getConnectionStats().totalConnections,
+          environment: process.env.NODE_ENV || 'development',
+          timestamp: new Date()
+        };
+        
+        telemetryService.updateComponentMetrics(SERVER_NAME, metrics);
+      } catch (error) {
+        logger.warn(`Failed to collect server metrics: ${error.message}`, SERVER_NAME);
+      }
+    };
+    
+    // Start server metrics collection every 3 seconds
+    setInterval(collectServerMetrics, 3000);
+    
     server.listen(PORT, () => {
       logger.success(`${SERVER_NAME} running on port ${PORT}`, SERVER_NAME);
       logger.info(`Process ID: ${process.pid}`, SERVER_NAME);
       logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`, SERVER_NAME);
+      logger.info('Telemetry metrics collection started', SERVER_NAME);
+      
+      // Collect initial metrics
+      setTimeout(collectServerMetrics, 1000);
     });
     
     const gracefulShutdown = async () => {
