@@ -146,6 +146,7 @@ const loginSchema = new mongoose.Schema({
   },
   // In-app notification delivery tracking fields (mirrors email tracking structure)
   loginInAppNotification: {
+    
     status: {
       type: String,
       enum: ['pending', 'queued', 'delivered', 'failed', 'not_sent'],

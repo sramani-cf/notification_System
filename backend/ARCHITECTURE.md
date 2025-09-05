@@ -208,7 +208,13 @@ Controller → Notification Service → Queue Manager → In-App Queue → In-Ap
 Client → Socket.IO → Server (Sticky Session) → Authentication → User Room Join → Real-time Events
 ```
 
-### 5. **Enhanced Retry Mechanism Flow**
+### 5. **Friend Request Notification Flow**
+```
+Friend Request Button Click → POST /api/friend-requests → Controller Creates FriendRequest → 
+Notification Service → In-App Queue → In-App Worker → WebSocket Service → Toast Notification
+```
+
+### 6. **Enhanced Retry Mechanism Flow**
 ```
 Failed Email → Mail Retry-1 (5min) → Mail Retry-2 (30min) → Dead Letter Queue → Manual Review
 Failed In-App → In-App Retry-1 (2min) → In-App Retry-2 (10min) → In-App DLQ → Manual Review
@@ -302,6 +308,59 @@ Failed In-App → In-App Retry-1 (2min) → In-App Retry-2 (10min) → In-App DL
       attempts: Number
     }]
   },
+  createdAt: Date,
+  updatedAt: Date
+}
+```
+
+#### **FriendRequests Collection**
+```javascript
+{
+  fromUserId: Number,      // User sending the request
+  fromUsername: String,    // Username of sender
+  toUserId: Number,        // User receiving the request
+  toUsername: String,      // Username of recipient
+  message: String,         // Optional message (max 500 chars)
+  requestStatus: String,   // pending|accepted|rejected|cancelled|blocked
+  acceptedAt: Date,        // When request was accepted
+  rejectedAt: Date,        // When request was rejected
+  cancelledAt: Date,       // When request was cancelled
+  mutualFriends: [{        // List of mutual friends
+    userId: Number,
+    username: String
+  }],
+  mutualFriendsCount: Number,     // Count of mutual friends
+  relationshipType: String,       // friend|close_friend|family|colleague|acquaintance
+  previousInteractions: Number,   // Count of previous interactions
+  blockedByReceiver: Boolean,     // If blocked by recipient
+  reportedAsSpam: Boolean,        // If reported as spam
+  visibility: String,             // public|private|mutual_only
+  expiresAt: Date,               // Request expiration (30 days default)
+  assignedServer: String,         // Server that processed the request
+  processedBy: String,           // Processing identifier
+  // In-app notification delivery tracking (mirrors login schema)
+  friendRequestInAppNotification: {
+    status: String,         // pending|queued|delivered|failed|not_sent
+    attempts: Number,       // Delivery attempts
+    lastAttemptAt: Date,    // Last delivery attempt
+    deliveredAt: Date,      // When delivered via WebSocket
+    failedAt: Date,         // When delivery failed
+    failureReason: String,  // Failure description
+    notificationId: String, // Reference to InAppNotification record
+    queueJobId: String,     // BullMQ job ID
+    socketId: String,       // Socket ID that received notification
+    deliveredVia: String,   // websocket|polling|fallback
+    deliveryHistory: [{     // Complete delivery audit trail
+      attempt: Number,
+      timestamp: Date,
+      status: String,
+      error: String,
+      queueName: String,
+      socketId: String,
+      deliveryMethod: String
+    }]
+  },
+  metadata: Map,          // Additional metadata
   createdAt: Date,
   updatedAt: Date
 }
@@ -433,11 +492,29 @@ POST /api/session                   # Create user session
 GET  /api/session/:userId           # Get session details
 ```
 
+### **Friend Request & Social Features**
+```
+POST /api/friend-requests           # Send friend request (triggers in-app notification)
+GET  /api/friend-requests           # List friend requests with pagination
+GET  /api/friend-requests/:id       # Get specific friend request details
+DELETE /api/friend-requests/:id     # Delete friend request
+PATCH /api/friend-requests/:id/accept   # Accept friend request
+PATCH /api/friend-requests/:id/reject   # Reject friend request
+PATCH /api/friend-requests/:id/cancel   # Cancel sent request
+PATCH /api/friend-requests/:id/block    # Block user
+GET  /api/friend-requests/user/:userId/pending  # Get pending requests for user
+GET  /api/friend-requests/user/:userId/sent     # Get sent requests by user
+GET  /api/friend-requests/user/:userId/friends  # Get user's friends
+GET  /api/friend-requests/statistics    # Friend request analytics
+GET  /api/friend-requests/notifications/failed   # Failed friend request notifications
+GET  /api/friend-requests/notifications/pending  # Pending friend request notifications
+POST /api/friend-requests/cleanup       # Cleanup expired requests
+```
+
 ### **Other Services**
 ```
 POST /api/reset-passwords           # Password reset requests
 POST /api/purchases                 # Purchase notifications
-POST /api/friend-requests           # Social features
 ```
 
 ### **WebSocket Events**
@@ -531,9 +608,10 @@ npm run start:all   # All services
 
 ### **Testing**
 ```bash
-node test-login-notification.js     # Test real-time notifications
-node test-notification-toast.html   # Test UI notifications
-node verify-notification-toast.js   # Verify toast functionality
+node test-login-notification.js           # Test real-time login notifications
+node test-friend-request-notification.js  # Test friend request in-app notifications
+node test-notification-toast.html         # Test UI notifications
+node verify-notification-toast.js         # Verify toast functionality
 ```
 
 ---
@@ -563,12 +641,16 @@ node verify-notification-toast.js   # Verify toast functionality
 
 ## 🔄 Recent Enhancements
 
-### **🎯 Latest Updates (Enhanced Queue System)**
-1. **Enhanced In-App Queue Architecture**: 4-tier retry system matching email reliability
-2. **Queue-Specific Escalation**: Independent retry logic for email and in-app notifications
-3. **Escalation History Tracking**: Complete audit trail of queue transitions
-4. **Telemetry Service Integration**: Real-time monitoring and performance tracking
-5. **Advanced Delivery Tracking**: Enhanced metadata with queue-specific attempt limits
+### **🎯 Latest Updates (Friend Request Notifications & Enhanced Queue System)**
+1. **Friend Request In-App Notifications**: Complete implementation with real-time WebSocket delivery
+2. **Friend Request Notification Tracking**: Full delivery audit trail matching login notification pattern
+3. **Enhanced In-App Queue Architecture**: 4-tier retry system matching email reliability
+4. **Queue-Specific Escalation**: Independent retry logic for email and in-app notifications
+5. **Notification Service Validation Fix**: Added friend_request and purchase to valid notification types
+6. **In-App Worker Enhancement**: Added friend request processing with complete status tracking
+7. **Escalation History Tracking**: Complete audit trail of queue transitions
+8. **Telemetry Service Integration**: Real-time monitoring and performance tracking
+9. **Advanced Delivery Tracking**: Enhanced metadata with queue-specific attempt limits
 
 ### **🏗️ Previous Enhancements**
 1. **WebSocket Integration**: Full Socket.IO implementation with Redis adapter
