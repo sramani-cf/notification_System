@@ -9,6 +9,8 @@ const signupRoutes = require('./signup.routes');
 const friendRequestRoutes = require('./friendRequest.routes');
 const sessionRoutes = require('./session.routes');
 const liveViewRoutes = require('./liveView.routes');
+const fcmTokenRoutes = require('./fcmToken.routes');
+const pushNotificationRoutes = require('./pushNotification.routes');
 
 const { attachServerInfo, logRequest, sanitizeInput } = require('../middleware/auth');
 
@@ -25,5 +27,7 @@ router.use('/friend-requests', friendRequestRoutes);
 router.use('/session', sessionRoutes);
 router.use('/sessions', sessionRoutes);
 router.use('/live-view', liveViewRoutes);
+router.use('/fcm-tokens', fcmTokenRoutes);
+router.use('/push-notifications', pushNotificationRoutes);
 
 module.exports = router;

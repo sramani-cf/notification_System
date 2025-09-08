@@ -65,6 +65,11 @@ jspm_packages/
 .env.test
 .env.production
 
+# Firebase Service Account (contains sensitive credentials)
+firebase-service-account.json
+*-service-account.json
+serviceAccountKey.json
+
 # parcel-bundler cache
 .cache
 .parcel-cache

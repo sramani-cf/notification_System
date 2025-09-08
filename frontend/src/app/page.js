@@ -8,6 +8,8 @@ import NotificationHistory from '@/components/NotificationHistory';
 import ResponseDisplay from '@/components/ResponseDisplay';
 import NotificationManager from '@/components/NotificationManager';
 import UserInfo from '@/components/UserInfo';
+import PushNotificationManager from '@/components/PushNotificationManager';
+import PushNotificationToast from '@/components/PushNotificationToast';
 import { useNotifications } from '@/hooks/useNotifications';
 import { useUser } from '@/contexts/UserContext';
 
@@ -69,6 +71,11 @@ export default function NotificationDemo() {
               onStopBulk={stopBulk}
             />
             
+            {/* Push Notification Manager */}
+            {user && (
+              <PushNotificationManager userId={user.id} />
+            )}
+            
             <ResponseDisplay 
               response={response} 
               error={error} 
@@ -89,6 +96,9 @@ export default function NotificationDemo() {
       
       {/* WebSocket Notification Manager */}
       <NotificationManager user={user} />
+      
+      {/* Push Notification Toast */}
+      <PushNotificationToast />
     </div>
   );
 }

@@ -8,6 +8,7 @@ class NotificationService {
   constructor() {
     this.isInitialized = false;
     this.emailServiceReady = false;
+    this.pushServiceReady = false;
   }
 
   async initialize() {
@@ -33,6 +34,16 @@ class NotificationService {
         logger.success('Email service initialized successfully', 'NOTIFICATION-SERVICE');
       }
 
+      // Step 3: Initialize push notification service
+      logger.info('Initializing push notification service...', 'NOTIFICATION-SERVICE');
+      const pushService = require('./pushNotificationService');
+      this.pushServiceReady = await pushService.initialize();
+      if (!this.pushServiceReady) {
+        logger.warn('Push notification service initialization failed - push notifications will not be sent', 'NOTIFICATION-SERVICE');
+      } else {
+        logger.success('Push notification service initialized successfully', 'NOTIFICATION-SERVICE');
+      }
+
       this.isInitialized = true;
       logger.success('Notification service initialized successfully', 'NOTIFICATION-SERVICE');
       return true;
@@ -40,6 +51,7 @@ class NotificationService {
       logger.error(`Failed to initialize notification service: ${error.message}`, 'NOTIFICATION-SERVICE');
       this.isInitialized = false;
       this.emailServiceReady = false;
+      this.pushServiceReady = false;
       throw error; // Re-throw to prevent server startup with broken notification system
     }
   }
@@ -59,8 +71,15 @@ class NotificationService {
   }
 
   /**
+   * Check if push notification sending is available
+   */
+  isPushReady() {
+    return this.isReady() && this.pushServiceReady;
+  }
+
+  /**
    * Main fanout method - distributes notifications to appropriate channels
-   * Handles both email and in-app notifications for signup, login, and password reset
+   * Handles email, in-app, and push notifications for all notification types
    */
   async sendNotification(type, data, options = {}) {
     // Check if service is ready
@@ -75,7 +94,8 @@ class NotificationService {
 
     const results = {
       email: null,
-      inapp: null
+      inapp: null,
+      push: null
     };
 
     // Send email notification if enabled for this type
@@ -124,14 +144,44 @@ class NotificationService {
       };
     }
 
+    // Send push notification if enabled for this type
+    if (this.shouldSendPush(type)) {
+      try {
+        if (!this.isPushReady()) {
+          logger.error('Push service not available - check Firebase configuration', 'NOTIFICATION-SERVICE');
+          results.push = {
+            success: false,
+            reason: 'Push service not available - check Firebase configuration'
+          };
+        } else {
+          const pushService = require('./pushNotificationService');
+          results.push = await pushService.sendPushNotification(type, data, options);
+        }
+      } catch (error) {
+        logger.error(`Push notification failed: ${error.message}`, 'NOTIFICATION-SERVICE');
+        results.push = {
+          success: false,
+          reason: error.message
+        };
+      }
+    } else {
+      logger.info(`Push notifications not configured for type: ${type}`, 'NOTIFICATION-SERVICE');
+      results.push = {
+        success: false,
+        reason: 'Push notifications not enabled for this type'
+      };
+    }
+
     // Return combined results
     const emailSuccess = results.email?.success || false;
     const inappSuccess = results.inapp?.success || false;
+    const pushSuccess = results.push?.success || false;
 
     return {
-      success: emailSuccess || inappSuccess, // At least one succeeded
+      success: emailSuccess || inappSuccess || pushSuccess, // At least one succeeded
       email: results.email,
       inapp: results.inapp,
+      push: results.push,
       type: type,
       recipient: data.email || data.userId,
       timestamp: new Date().toISOString()
@@ -169,6 +219,14 @@ class NotificationService {
       NOTIFICATION_TYPES.FRIEND_REQUEST
     ];
     return inAppEnabledTypes.includes(type);
+  }
+
+  shouldSendPush(type) {
+    // Send push notifications ONLY for purchase events
+    const pushEnabledTypes = [
+      NOTIFICATION_TYPES.PURCHASE
+    ];
+    return pushEnabledTypes.includes(type);
   }
 
   async sendEmailNotification(type, data, options = {}) {

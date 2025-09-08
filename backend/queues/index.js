@@ -184,7 +184,71 @@ class QueueManager {
     });
     this.addQueueTelemetry(this.queues.inappDlq, 'inappDlq');
 
-    logger.info('All queues (including enhanced in-app notification retry queues) initialized successfully', 'QUEUE-MANAGER');
+    // Push notification queue - handles FCM push notifications
+    this.queues.push = new Queue(config.queues.push?.name || 'push-notification-queue', {
+      connection,
+      defaultJobOptions: {
+        removeOnComplete: 100,
+        removeOnFail: 50,
+        attempts: config.queues.push?.attempts || 3,
+        backoff: {
+          type: 'exponential',
+          settings: {
+            delay: 1000 // Base delay for exponential backoff
+          }
+        }
+      }
+    });
+    this.addQueueTelemetry(this.queues.push, 'push');
+
+    // Push retry-1 queue - 5 minute delay for first escalation
+    this.queues.pushRetry1 = new Queue(config.queues.pushRetry1?.name || 'push-retry-1-queue', {
+      connection,
+      defaultJobOptions: {
+        removeOnComplete: 100,
+        removeOnFail: 50,
+        delay: config.queues.pushRetry1?.delay || 5 * 60 * 1000, // 5 minutes
+        attempts: config.queues.pushRetry1?.attempts || 2,
+        backoff: {
+          type: 'exponential',
+          settings: {
+            delay: 2000
+          }
+        }
+      }
+    });
+    this.addQueueTelemetry(this.queues.pushRetry1, 'pushRetry1');
+
+    // Push retry-2 queue - 30 minute delay for second escalation
+    this.queues.pushRetry2 = new Queue(config.queues.pushRetry2?.name || 'push-retry-2-queue', {
+      connection,
+      defaultJobOptions: {
+        removeOnComplete: 100,
+        removeOnFail: 50,
+        delay: config.queues.pushRetry2?.delay || 30 * 60 * 1000, // 30 minutes
+        attempts: config.queues.pushRetry2?.attempts || 1,
+        backoff: {
+          type: 'exponential',
+          settings: {
+            delay: 5000
+          }
+        }
+      }
+    });
+    this.addQueueTelemetry(this.queues.pushRetry2, 'pushRetry2');
+
+    // Push Dead Letter Queue - for permanently failed push notifications
+    this.queues.pushDlq = new Queue(config.queues.pushDlq?.name || 'push-dlq-queue', {
+      connection,
+      defaultJobOptions: {
+        removeOnComplete: 500,
+        removeOnFail: 200,
+        attempts: 1 // No retries in DLQ
+      }
+    });
+    this.addQueueTelemetry(this.queues.pushDlq, 'pushDlq');
+
+    logger.info('All queues (including push notification queues) initialized successfully', 'QUEUE-MANAGER');
   }
 
   addQueueTelemetry(queue, queueName) {
@@ -349,6 +413,61 @@ class QueueManager {
       return job;
     } catch (error) {
       logger.error(`Failed to add in-app retry job to ${queueName} queue: ${error.message}`, 'QUEUE-MANAGER');
+      throw error;
+    }
+  }
+
+  async addPushJob(queueName, jobData, options = {}) {
+    if (!this.isInitialized) {
+      throw new Error('Queue manager not initialized');
+    }
+
+    const queue = this.queues[queueName];
+    if (!queue) {
+      throw new Error(`Queue '${queueName}' not found`);
+    }
+
+    try {
+      const job = await queue.add(`${jobData.type}-push`, jobData, {
+        ...options,
+        priority: this.getJobPriority(jobData.type),
+        jobId: jobData.notificationId ? `push-${jobData.notificationId}` : undefined
+      });
+
+      logger.info(`Added push notification job to ${queueName} queue: ${job.id}`, 'QUEUE-MANAGER');
+      return job;
+    } catch (error) {
+      logger.error(`Failed to add push job to ${queueName} queue: ${error.message}`, 'QUEUE-MANAGER');
+      throw error;
+    }
+  }
+
+  async addPushRetryJob(queueName, jobData, options = {}) {
+    if (!this.isInitialized) {
+      throw new Error('Queue manager not initialized');
+    }
+
+    const validRetryQueues = ['pushRetry1', 'pushRetry2', 'pushDlq'];
+    if (!validRetryQueues.includes(queueName)) {
+      throw new Error(`Invalid push retry queue: ${queueName}`);
+    }
+
+    const queue = this.queues[queueName];
+    if (!queue) {
+      throw new Error(`Queue '${queueName}' not found`);
+    }
+
+    try {
+      const job = await queue.add(`${jobData.type}-push-retry`, jobData, {
+        ...options,
+        priority: this.getJobPriority(jobData.type),
+        jobId: jobData.notificationId ? `push-retry-${jobData.notificationId}` : undefined
+      });
+
+      logger.info(`Added push retry job to ${queueName} queue: ${job.id}`, 'QUEUE-MANAGER');
+      return job;
+    } catch (error) {
+      logger.error(`Failed to add push retry job to ${queueName} queue: ${error.message}`, 'QUEUE-MANAGER');
       throw error;
     }
   }

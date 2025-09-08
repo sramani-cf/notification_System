@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Connection Test</title>
+</head>
+<body>
+    <h1>Testing API Connection</h1>
+    <button onclick="testAPI()">Test API</button>
+    <button onclick="testNotification()">Test Purchase Notification</button>
+    <div id="result"></div>
+
+    <script>
+        async function testAPI() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = 'Testing...';
+            
+            try {
+                const response = await fetch('http://localhost:8000/api/health', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    resultDiv.innerHTML = `<pre style="color: green;">SUCCESS: ${JSON.stringify(data, null, 2)}</pre>`;
+                } else {
+                    resultDiv.innerHTML = `<pre style="color: red;">Error: Status ${response.status}</pre>`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<pre style="color: red;">FETCH ERROR: ${error.message}</pre>`;
+            }
+        }
+
+        async function testNotification() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = 'Sending purchase notification...';
+            
+            try {
+                const response = await fetch('http://localhost:8000/api/notifications', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        type: 'purchase',
+                        data: {
+                            userId: '1',
+                            username: 'TestUser',
+                            email: 'test@example.com',
+                            orderId: 'TEST-' + Date.now(),
+                            totalAmount: 99.99,
+                            currency: 'USD'
+                        }
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    resultDiv.innerHTML = `<pre style="color: green;">NOTIFICATION SENT: ${JSON.stringify(data, null, 2)}</pre>`;
+                } else {
+                    const error = await response.text();
+                    resultDiv.innerHTML = `<pre style="color: red;">Error: Status ${response.status}\n${error}</pre>`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `<pre style="color: red;">FETCH ERROR: ${error.message}</pre>`;
+            }
+        }
+    </script>
+</body>
+</html>

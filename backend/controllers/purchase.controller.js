@@ -1,5 +1,7 @@
 const Purchase = require('../models/purchases.model');
 const logger = require('../utils/logger');
+const notificationService = require('../services/notificationService');
+const { NOTIFICATION_TYPES } = require('../constants');
 
 class PurchaseController {
   async create(req, res, next) {
@@ -25,6 +27,57 @@ class PurchaseController {
       await purchase.save();
       
       logger.success(`Created purchase order: ${purchase._id} (Order ID: ${purchase.orderId})`, req.serverInfo);
+      
+      // Trigger push notification for purchase
+      try {
+        const notificationData = {
+          userId: purchase.userId,
+          username: purchase.customerName || `User ${purchase.userId}`,
+          email: purchase.customerEmail,
+          orderId: purchase.orderId,
+          totalAmount: purchase.totalAmount,
+          currency: purchase.currency || 'USD',
+          items: purchase.items,
+          paymentMethod: purchase.paymentMethod,
+          purchaseId: purchase._id.toString()
+        };
+
+        const notificationResult = await notificationService.sendNotification(
+          NOTIFICATION_TYPES.PURCHASE,
+          notificationData,
+          {
+            serverInfo: req.serverInfo,
+            sourceType: 'purchase',
+            sourceId: purchase._id,
+            sourceModel: 'Purchase',
+            endpoint: req.originalUrl,
+            userAgent: req.headers['user-agent'],
+            ipAddress: req.ip
+          }
+        );
+
+        logger.info(`Purchase notification sent: ${JSON.stringify(notificationResult)}`, req.serverInfo);
+        
+        // Update purchase with push notification tracking using new methods
+        if (notificationResult.push && notificationResult.push.notificationId) {
+          await purchase.markPurchasePushNotificationQueued(
+            notificationResult.push.jobId,
+            notificationResult.push.notificationId
+          );
+          logger.info(`Marked purchase ${purchase._id} push notification as queued with ID ${notificationResult.push.notificationId}`, req.serverInfo);
+        }
+      } catch (notificationError) {
+        // Don't fail the purchase if notification fails
+        logger.error(`Failed to send purchase notification: ${notificationError.message}`, req.serverInfo);
+        
+        // Track notification failure using new method
+        await purchase.markPurchasePushNotificationFailed(
+          notificationError.message,
+          null,
+          'push'
+        );
+        logger.error(`Marked purchase ${purchase._id} push notification as failed: ${notificationError.message}`, req.serverInfo);
+      }
       
       res.status(201).json({
         success: true,

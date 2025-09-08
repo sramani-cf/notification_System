@@ -147,6 +147,79 @@ const purchaseSchema = new mongoose.Schema({
   metadata: {
     type: Map,
     of: mongoose.Schema.Types.Mixed
+  },
+  // Push notification delivery tracking fields (mirrors login email schema structure)
+  purchasePushNotification: {
+    status: {
+      type: String,
+      enum: ['pending', 'queued', 'sending', 'delivered', 'failed', 'clicked', 'not_sent'],
+      default: 'not_sent',
+      index: true
+    },
+    attempts: {
+      type: Number,
+      default: 0
+    },
+    lastAttemptAt: {
+      type: Date,
+      default: null
+    },
+    deliveredAt: {
+      type: Date,
+      default: null
+    },
+    failedAt: {
+      type: Date,
+      default: null
+    },
+    clickedAt: {
+      type: Date,
+      default: null
+    },
+    failureReason: {
+      type: String,
+      default: null
+    },
+    messageId: {
+      type: String,
+      default: null
+    },
+    notificationId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'PushNotification',
+      default: null,
+      index: true
+    },
+    queueJobId: {
+      type: String,
+      default: null
+    },
+    fcmResponse: {
+      successCount: {
+        type: Number,
+        default: 0
+      },
+      failureCount: {
+        type: Number,
+        default: 0
+      },
+      messageIds: [String],
+      errors: [String]
+    },
+    fcmTokenCount: {
+      type: Number,
+      default: 0
+    },
+    deliveryHistory: [{
+      attempt: Number,
+      timestamp: Date,
+      status: String,
+      error: String,
+      queueName: String,
+      fcmTokenCount: Number,
+      successCount: Number,
+      failureCount: Number
+    }]
   }
 }, {
   timestamps: true,
@@ -199,6 +272,105 @@ purchaseSchema.methods.toJSON = function() {
     obj.metadata = Object.fromEntries(obj.metadata);
   }
   return obj;
+};
+
+// Instance methods for push notification delivery tracking (mirrors login email methods)
+purchaseSchema.methods.updatePurchasePushNotificationStatus = function(status, details = {}) {
+  this.purchasePushNotification = this.purchasePushNotification || {};
+  this.purchasePushNotification.status = status;
+  
+  // Add to delivery history
+  this.purchasePushNotification.deliveryHistory = this.purchasePushNotification.deliveryHistory || [];
+  this.purchasePushNotification.deliveryHistory.push({
+    attempt: this.purchasePushNotification.attempts + 1,
+    timestamp: new Date(),
+    status: status,
+    error: details.error || null,
+    queueName: details.queueName || 'push',
+    fcmTokenCount: details.fcmTokenCount || 0,
+    successCount: details.successCount || 0,
+    failureCount: details.failureCount || 0
+  });
+  
+  // Update specific fields based on status
+  switch (status) {
+    case 'queued':
+      this.purchasePushNotification.queueJobId = details.jobId;
+      this.purchasePushNotification.notificationId = details.notificationId;
+      break;
+    case 'sending':
+      this.purchasePushNotification.attempts += 1;
+      this.purchasePushNotification.lastAttemptAt = new Date();
+      this.purchasePushNotification.fcmTokenCount = details.fcmTokenCount || 0;
+      break;
+    case 'delivered':
+      this.purchasePushNotification.deliveredAt = new Date();
+      this.purchasePushNotification.messageId = details.messageId;
+      if (details.fcmResponse) {
+        this.purchasePushNotification.fcmResponse = {
+          successCount: details.fcmResponse.successCount || 0,
+          failureCount: details.fcmResponse.failureCount || 0,
+          messageIds: details.fcmResponse.messageIds || [],
+          errors: details.fcmResponse.errors || []
+        };
+      }
+      break;
+    case 'failed':
+      this.purchasePushNotification.failedAt = new Date();
+      this.purchasePushNotification.failureReason = details.error || 'Unknown error';
+      this.purchasePushNotification.attempts += 1;
+      this.purchasePushNotification.lastAttemptAt = new Date();
+      if (details.fcmResponse) {
+        this.purchasePushNotification.fcmResponse = {
+          successCount: details.fcmResponse.successCount || 0,
+          failureCount: details.fcmResponse.failureCount || 0,
+          messageIds: details.fcmResponse.messageIds || [],
+          errors: details.fcmResponse.errors || []
+        };
+      }
+      break;
+    case 'clicked':
+      this.purchasePushNotification.clickedAt = new Date();
+      break;
+  }
+  
+  return this.save();
+};
+
+purchaseSchema.methods.markPurchasePushNotificationQueued = function(jobId, notificationId) {
+  return this.updatePurchasePushNotificationStatus('queued', { jobId, notificationId });
+};
+
+purchaseSchema.methods.markPurchasePushNotificationSending = function(fcmTokenCount, queueName = 'push') {
+  return this.updatePurchasePushNotificationStatus('sending', { fcmTokenCount, queueName });
+};
+
+purchaseSchema.methods.markPurchasePushNotificationDelivered = function(messageId, fcmResponse) {
+  return this.updatePurchasePushNotificationStatus('delivered', { messageId, fcmResponse });
+};
+
+purchaseSchema.methods.markPurchasePushNotificationFailed = function(error, fcmResponse, queueName = 'push') {
+  return this.updatePurchasePushNotificationStatus('failed', { error, fcmResponse, queueName });
+};
+
+purchaseSchema.methods.markPurchasePushNotificationClicked = function() {
+  return this.updatePurchasePushNotificationStatus('clicked');
+};
+
+purchaseSchema.methods.getPurchasePushNotificationSummary = function() {
+  return {
+    status: this.purchasePushNotification?.status || 'not_sent',
+    attempts: this.purchasePushNotification?.attempts || 0,
+    lastAttemptAt: this.purchasePushNotification?.lastAttemptAt,
+    deliveredAt: this.purchasePushNotification?.deliveredAt,
+    failedAt: this.purchasePushNotification?.failedAt,
+    clickedAt: this.purchasePushNotification?.clickedAt,
+    messageId: this.purchasePushNotification?.messageId,
+    failureReason: this.purchasePushNotification?.failureReason,
+    fcmTokenCount: this.purchasePushNotification?.fcmTokenCount || 0,
+    fcmResponse: this.purchasePushNotification?.fcmResponse,
+    totalHistoryEntries: this.purchasePushNotification?.deliveryHistory?.length || 0
+  };
 };
 
 // Static methods

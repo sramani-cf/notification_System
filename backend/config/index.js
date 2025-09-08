@@ -92,6 +92,27 @@ const config = {
     inappDlq: {
       name: 'inapp-dead-letter-queue',
       concurrency: parseInt(process.env.INAPP_DLQ_CONCURRENCY) || 1
+    },
+    push: {
+      name: 'push-notification-queue',
+      concurrency: parseInt(process.env.PUSH_QUEUE_CONCURRENCY) || 8,
+      attempts: parseInt(process.env.PUSH_MAX_ATTEMPTS) || 3
+    },
+    pushRetry1: {
+      name: 'push-retry-1-queue',
+      delay: parseInt(process.env.PUSH_RETRY_1_DELAY) || 300000, // 5 minutes
+      concurrency: parseInt(process.env.PUSH_RETRY_1_CONCURRENCY) || 5,
+      attempts: parseInt(process.env.PUSH_RETRY_1_MAX_ATTEMPTS) || 2
+    },
+    pushRetry2: {
+      name: 'push-retry-2-queue',
+      delay: parseInt(process.env.PUSH_RETRY_2_DELAY) || 1800000, // 30 minutes
+      concurrency: parseInt(process.env.PUSH_RETRY_2_CONCURRENCY) || 3,
+      attempts: parseInt(process.env.PUSH_RETRY_2_MAX_ATTEMPTS) || 1
+    },
+    pushDlq: {
+      name: 'push-dead-letter-queue',
+      concurrency: parseInt(process.env.PUSH_DLQ_CONCURRENCY) || 1
     }
   },
 
@@ -120,6 +141,44 @@ const config = {
     password: process.env.EMAIL_PASSWORD,
     from: process.env.EMAIL_FROM || 'noreply@notification-system.com'
   },
+  
+  firebase: (() => {
+    // Try to load from service account file first
+    if (process.env.FIREBASE_SERVICE_ACCOUNT_PATH) {
+      try {
+        const serviceAccount = require(process.env.FIREBASE_SERVICE_ACCOUNT_PATH);
+        return {
+          projectId: serviceAccount.project_id,
+          privateKey: serviceAccount.private_key,
+          clientEmail: serviceAccount.client_email,
+          databaseURL: `https://${serviceAccount.project_id}.firebaseio.com`,
+          storageBucket: `${serviceAccount.project_id}.appspot.com`,
+          fcmServerKey: process.env.FCM_SERVER_KEY,
+          vapidKey: process.env.FCM_VAPID_KEY || 'BPB0ZMeEdSl7GtjgB_X3ssiXLJt_4Qld4bgjFA-wHaRT31RIbgh6b05OTmhEZ4FNZzc7TVp3k72KMvJLEM-kbMA',
+          messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || '1024557267709',
+          appId: process.env.FIREBASE_APP_ID || '1:1024557267709:web:de714ed1b703418b159c94',
+          measurementId: process.env.FIREBASE_MEASUREMENT_ID || 'G-T2HZ1JW8QZ'
+        };
+      } catch (error) {
+        console.warn('Failed to load Firebase service account file, falling back to env vars');
+      }
+    }
+    
+    // Fall back to individual environment variables
+    return {
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY ? 
+        process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n') : undefined,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      databaseURL: process.env.FIREBASE_DATABASE_URL,
+      storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+      fcmServerKey: process.env.FCM_SERVER_KEY,
+      vapidKey: process.env.FCM_VAPID_KEY,
+      messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+      appId: process.env.FIREBASE_APP_ID,
+      measurementId: process.env.FIREBASE_MEASUREMENT_ID
+    };
+  })(),
   
   logging: {
     level: process.env.LOG_LEVEL || 'info',
