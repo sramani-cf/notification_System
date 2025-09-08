@@ -4,13 +4,15 @@ importScripts('https://www.gstatic.com/firebasejs/10.7.0/firebase-messaging-comp
 
 // Initialize the Firebase app in the service worker
 // Use the same config as your web app
+// These values must match exactly what's in your .env.local file
 firebase.initializeApp({
   apiKey: "AIzaSyC_0URjdRBJAV_0x0F4q1K10ID7eJV_BtQ",
   authDomain: "notification-system-7b5b6.firebaseapp.com",
   projectId: "notification-system-7b5b6",
   storageBucket: "notification-system-7b5b6.firebasestorage.app",
   messagingSenderId: "1024557267709",
-  appId: "1:1024557267709:web:de714ed1b703418b159c94"
+  appId: "1:1024557267709:web:de714ed1b703418b159c94",
+  measurementId: "G-T2HZ1JW8QZ"
 });
 
 // Retrieve an instance of Firebase Messaging

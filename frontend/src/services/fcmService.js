@@ -14,9 +14,24 @@ class FCMService {
    */
   async initialize(userId) {
     try {
+      // Log Firebase configuration status
+      console.log('🔥 Initializing Firebase Cloud Messaging...');
+      console.log('Project:', process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID);
+      
       if (!messaging) {
-        console.warn('Firebase Messaging is not supported in this browser');
-        return false;
+        console.warn('Firebase Messaging is not initialized');
+        console.log('Waiting for Firebase to initialize...');
+        
+        // Wait a bit for Firebase to initialize
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Try to get messaging again from firebase config
+        const { messaging: messagingRetry } = await import('../config/firebase');
+        if (!messagingRetry) {
+          console.error('Firebase Messaging is not supported in this browser');
+          console.log('💡 Push notification tracking will still work in the database');
+          return false;
+        }
       }
 
       // Request notification permission
@@ -32,7 +47,10 @@ class FCMService {
       // Get FCM token
       const token = await this.getToken();
       if (!token) {
-        console.error('Failed to get FCM token');
+        console.error('Failed to get FCM token - Firebase may not be configured correctly');
+        console.log('💡 The purchase tracking system will still work without push notifications');
+        console.log('📋 Check PUSH_NOTIFICATION_TROUBLESHOOTING.md for setup instructions');
+        // Allow the app to continue even without FCM token
         return false;
       }
 
